@@ -69,7 +69,9 @@ int main(int argc, char** argv) {
   float seconds       = envf("SECONDS", 10);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
   float fps = envf("FPS", 60.f);            // frame rate the substeps are sized for
   const float dt = 1.f / (fps * substeps);
-  render::Theme th;
+  int themeIdx = (int)envf("THEME", 0);           // THEME=0..3: water, lava, slime, mercury
+  if (themeIdx < 0 || themeIdx >= render::THEME_COUNT) themeIdx = 0;
+  render::Theme th = render::THEMES[themeIdx];
   th.thrRim  = (uint8_t)envf("THR_RIM", th.thrRim);
   th.thrBody = (uint8_t)envf("THR_BODY", th.thrBody);
   th.thrDeep = (uint8_t)envf("THR_DEEP", th.thrDeep);

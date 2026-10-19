@@ -89,18 +89,32 @@ tools/sim_test.cpp   desktop harness: scripted tilt/shake, stats, BMP frames
 docs/                hardware, tuning, architecture notes
 ```
 
-## Making the animation
+## The fluids
 
-The GIF above comes from the harness, not a camera:
+| Water | Lava | Slime | Mercury |
+|:-:|:-:|:-:|:-:|
+| <img src="docs/media/water.gif" width="192" alt="water"> | <img src="docs/media/lava.gif" width="192" alt="lava"> | <img src="docs/media/slime.gif" width="192" alt="slime"> | <img src="docs/media/mercury.gif" width="192" alt="mercury"> |
+| tilt, flip, shake, settle | hard tilt, then settle | rocking | flip and shake |
+
+Same physics, different palettes; the mode button cycles through them and
+then into heat convection.
+
+## Making the animations
+
+All GIFs come from the harness, not a camera. Each run writes every Nth
+frame as `anim_NNNN.bmp` from `START` seconds onward:
 
 ```
 mkdir -p /tmp/anim
-HEAT=1 HOLD=1 TILT=0 SWAY=0.25 SECONDS=18 START=6 DUMP=2 /tmp/sim_test /tmp/anim 780
+HEAT=1 HOLD=1 TILT=0 SWAY=0.25 SECONDS=18 START=6 DUMP=3 /tmp/sim_test /tmp/anim 780   # heat
+THEME=1 SLOSH=1 SECONDS=8 START=1.5 DUMP=3 /tmp/sim_test /tmp/anim 780                # lava
+THEME=2 HOLD=1 TILT=0 SWAY=0.6 SECONDS=10 START=2 DUMP=3 /tmp/sim_test /tmp/anim 780  # slime
 ```
 
-`DUMP=2` writes every second frame (30 fps) as `anim_NNNN.bmp` from
-`START` seconds onward; `SWAY` adds a gentle rocking tilt. Assemble the
-frames with Pillow or ImageMagick (`magick /tmp/anim/anim_*.bmp -scale 200% -delay 3.3 -loop 0 out.gif`).
+`THEME` is 0–3 (water, lava, slime, mercury), `SWAY` adds a rocking tilt,
+`SLOSH` is a hard tilt then settle, and with no scenario flag the run is
+the default tilt, flip, shake, settle sequence. Assemble the frames with
+Pillow or ImageMagick (`magick /tmp/anim/anim_*.bmp -scale 200% -delay 5 -loop 0 out.gif`).
 
 ## License
 

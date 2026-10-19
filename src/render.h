@@ -31,6 +31,17 @@ struct Theme {
     : bg(bg_), deep(deep_), body(body_), rim(rim_), thrRim(tr), thrBody(tb), thrDeep(td) {}
 };
 
+// Colour themes. Index 0 is used for the thermal mode's background.
+static const Theme THEMES[] = {
+  // bg            deep            body            rim             thresholds
+  Theme({  0,  0,  0}, { 10, 40,150}, { 20, 90,220}, {120,220,255}, 35, 75, 200),   // water
+  Theme({  0,  0,  0}, {150, 20,  0}, {240,110,  0}, {255,235,120}, 35, 75, 200),   // lava
+  Theme({  0,  0,  0}, { 10,120, 40}, { 40,220, 90}, {200,255,200}, 35, 75, 200),   // slime
+  Theme({  0,  0,  0}, { 90, 90,110}, {170,170,190}, {255,255,255}, 35, 75, 200),   // mercury
+};
+static const char* const THEME_NAMES[] = { "water", "lava", "slime", "mercury" };
+constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
+
 class Renderer {
 public:
   uint16_t fbs[2][W * H];    // RGB565, byte-swapped for SPI; double-buffered

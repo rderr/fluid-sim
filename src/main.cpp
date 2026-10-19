@@ -90,14 +90,8 @@ static int   theme = 0;
 static float fAx = 0.f, fAy = 0.f;  // filtered chip-frame accel (g)
 static float biasX = 0.f, biasY = 0.f; // accel bias (chip frame, g), subtracted
 
-static const render::Theme THEMES[] = {
-  // bg            deep            body            rim
-  { {  0,  0,  0}, { 10, 40,150}, { 20, 90,220}, {120,220,255}, 35, 75, 200 },   // water
-  { {  0,  0,  0}, {150, 20,  0}, {240,110,  0}, {255,235,120}, 35, 75, 200 },   // lava
-  { {  0,  0,  0}, { 10,120, 40}, { 40,220, 90}, {200,255,200}, 35, 75, 200 },   // slime
-  { {  0,  0,  0}, { 90, 90,110}, {170,170,190}, {255,255,255}, 35, 75, 200 },   // mercury
-};
-constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
+using render::THEMES;
+using render::THEME_COUNT;
 constexpr int MODE_COUNT  = THEME_COUNT + 1;      // last mode = heat convection
 constexpr int MODE_HEAT   = THEME_COUNT;
 
