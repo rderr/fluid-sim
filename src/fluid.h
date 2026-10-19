@@ -85,6 +85,35 @@ struct Params {
   // Speed cap, px/s. Safety limit so no particle skips a grid cell in one
   // step; it should rarely be reached. Lower only if shakes look wrong.
   float maxSpeed      = 0.9f * CELL * 60.f;
+
+  // ---- Heat convection (only used when heat is enabled) ----------------
+  // Temperatures run 0 (cold) to 1 (heater). The wall that gravity points
+  // at is the heater, the opposite wall is the cold sink, and the free
+  // surface also cools toward ambient.
+  float ambient       = 0.25f;  // temperature particles cool toward at the surface
+  // Heater strength, 1/s. How fast particles touching the hot wall heat up.
+  //   up: plumes form sooner and hotter.  down: gentle, sparse plumes.
+  float heatRate      = 2.5f;
+  // Cooling strength, 1/s, at the cold wall and the free surface.
+  //   up: hot plumes die quickly at the top, strong sinking flow.
+  //   down: heat accumulates and the whole pool warms up.
+  float coolRate      = 1.5f;
+  // Thermal diffusion between neighbours, 1/s.
+  //   up: smooth temperature, plumes blur into broad warm regions.
+  //   down: sharp thin plumes that keep their identity longer.
+  float diffusion     = 2.0f;
+  // Bulk heat loss to the air, 1/s, applied to every particle. Sets the
+  // equilibrium: heater input vs this loss gives a stable bottom-hot,
+  // top-cool gradient instead of the whole pool saturating.
+  //   up: cooler pool, stronger contrast, plumes fade faster.
+  //   down: pool warms through; too low and everything goes white-hot.
+  float coolBulk      = 0.6f;
+  // Buoyancy: effective gravity = gravity * (1 - buoyancy * (T - Tmean)),
+  // relative to the pool's mean temperature so the pool's overall weight
+  // stays the same and only temperature differences drive the flow.
+  //   up: hot fluid rises hard, vigorous rolling convection.
+  //   down: lazy, barely visible circulation.
+  float buoyancy      = 2.5f;
 };
 
 class Sim {
@@ -92,6 +121,8 @@ public:
   int n = 0;
   float px[MAX_P], py[MAX_P];
   float vx[MAX_P], vy[MAX_P];
+  float temp[MAX_P];       // 0..1, only meaningful when heat is on
+  bool  heat = false;      // enable convection
   Params p;
 
   // Spawn `count` particles on a lattice filling the lower `fill` fraction of the box.
@@ -107,6 +138,7 @@ public:
         px[n] = x0 + c * spacing + ((int)(y / spacing) & 1 ? spacing * 0.25f : 0.f);
         py[n] = y;
         vx[n] = vy[n] = 0.f;
+        temp[n] = p.ambient;
         ++n;
       }
       y -= spacing * 0.87f;
@@ -118,9 +150,18 @@ public:
   void step(float dt, float gx, float gy) {
     const float h = RADIUS;
 
-    // 1. gravity
+    // 1. gravity (scaled per particle by buoyancy when heat is on)
     const float ax = gx * p.gravity * dt, ay = gy * p.gravity * dt;
-    for (int i = 0; i < n; ++i) { vx[i] += ax; vy[i] += ay; }
+    if (heat) {
+      float tm = meanTemp();
+      for (int i = 0; i < n; ++i) {
+        float sc = 1.f - p.buoyancy * (temp[i] - tm);
+        if (sc < -0.5f) sc = -0.5f; else if (sc > 2.f) sc = 2.f;
+        vx[i] += ax * sc; vy[i] += ay * sc;
+      }
+    } else {
+      for (int i = 0; i < n; ++i) { vx[i] += ax; vy[i] += ay; }
+    }
 
     // 2. viscosity impulses, using the pair list found in the previous step
     //    (positions have moved by at most a fraction of a pixel since)
@@ -158,6 +199,7 @@ public:
       rho_[pr.j] += a2; rhoN_[pr.j] += a3;
     }
     const float invH = 1.0f / h;
+    if (heat) heatStep(dt, gx, gy, invH);
     if (p.wallDensity > 0.f) {
       for (int i = 0; i < n; ++i) {
         // nearest distance to each wall, as q = d/h
@@ -229,6 +271,49 @@ public:
   }
 
   int pairCount() const { return nPairs_; }
+  float meanTemp() const { float t = 0; for (int i = 0; i < n; ++i) t += temp[i]; return n ? t / n : 0.f; }
+
+private:
+  // Heater on the wall gravity points at, cold sink on the opposite wall,
+  // surface cooling where the neighbourhood is sparse, diffusion over pairs.
+  void heatStep(float dt, float gx, float gy, float invH) {
+    // signed distance (px) of each particle from the hot wall, along gravity
+    float gm2 = gx * gx + gy * gy;
+    if (gm2 < 1e-4f) gm2 = 1e-4f;
+    float inv = fastInvSqrt(gm2);
+    float ux = gx * inv, uy = gy * inv;             // unit "down"
+    // the hot wall is where (p . u) is maximal: a box corner-aware bound
+    float hotMax = (ux > 0 ? (W - WALL) * ux : WALL * ux) + (uy > 0 ? (H - WALL) * uy : WALL * uy);
+    float coldMin = (ux > 0 ? WALL * ux : (W - WALL) * ux) + (uy > 0 ? WALL * uy : (H - WALL) * uy);
+    float meanRho = 0; for (int i = 0; i < n; ++i) meanRho += rho_[i];
+    meanRho = n ? meanRho / n : 1.f;
+    const float surfaceRho = 0.7f * meanRho;        // sparse neighbourhood = exposed surface
+    const float bulk = p.coolBulk * dt;
+    for (int i = 0; i < n; ++i) {
+      float d = px[i] * ux + py[i] * uy;
+      float qh = (hotMax - d) * invH;             // 0 at the hot wall, 1 at h away
+      float qc = (d - coldMin) * invH;
+      float T = temp[i];
+      if (qh < 1.f) { float a = 1.f - (qh < 0 ? 0 : qh); T += p.heatRate * dt * a * (1.f - T); }
+      if (qc < 1.f) { float a = 1.f - (qc < 0 ? 0 : qc); T += p.coolRate * dt * a * (0.f - T); }
+      if (rho_[i] < surfaceRho) {                   // exposed: cool toward ambient
+        float a = 1.f - rho_[i] / surfaceRho;
+        T += p.coolRate * dt * a * (p.ambient - T);
+      }
+      T += bulk * (p.ambient - T);
+      temp[i] = T;
+    }
+    // diffusion (explicit; k*dt*neighbours must stay well below 1)
+    float k = p.diffusion * dt;
+    if (k > 0.04f) k = 0.04f;
+    for (int c = 0; c < nPairs_; ++c) {
+      const Pair& pr = pairs_[c];
+      float f = k * (1.f - pr.q) * (temp[pr.j] - temp[pr.i]);
+      temp[pr.i] += f; temp[pr.j] -= f;
+    }
+  }
+
+public:
 
   // Average neighbour density (diagnostic).
   float meanDensity() const {

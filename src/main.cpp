@@ -11,7 +11,8 @@
 //   IO48  short press: respawn the fluid.
 //         hold 1.5 s with the board lying flat on a level surface: calibrate
 //         the accelerometer's x/y bias (saved to flash), fixing "level".
-//   IO0   cycle colour theme.
+//   IO0   cycle mode: water, lava, slime, mercury themes, then heat
+//         convection (heater on whichever wall gravity points at).
 #include <Arduino.h>
 #include <Preferences.h>
 #include <driver/gpio.h>
@@ -36,8 +37,9 @@ static Preferences     prefs;
 
 // Rendering runs on core 0 from a snapshot of particle positions while the
 // physics for the next frame runs on core 1.
-static float snapX[fluid::MAX_P], snapY[fluid::MAX_P];
+static float snapX[fluid::MAX_P], snapY[fluid::MAX_P], snapT[fluid::MAX_P];
 static int   snapN = 0;
+static bool  snapHeat = false;
 static SemaphoreHandle_t renderGo, renderDone;
 static uint32_t drawUsAcc = 0;
 
@@ -45,7 +47,7 @@ static void renderTask(void*) {
   for (;;) {
     xSemaphoreTake(renderGo, portMAX_DELAY);
     uint32_t t0 = micros();
-    rend.draw(snapX, snapY, snapN);
+    rend.draw(snapX, snapY, snapN, snapHeat ? snapT : nullptr);
     drawUsAcc += micros() - t0;
     display::pushFrame(rend.fb);            // waits for the previous DMA, queues this one
     xSemaphoreGive(renderDone);
@@ -56,6 +58,8 @@ static void submitFrame() {
   xSemaphoreTake(renderDone, portMAX_DELAY); // previous frame fully drawn and queued
   memcpy(snapX, sim.px, sim.n * sizeof(float));
   memcpy(snapY, sim.py, sim.n * sizeof(float));
+  if (sim.heat) memcpy(snapT, sim.temp, sim.n * sizeof(float));
+  snapHeat = sim.heat;
   snapN = sim.n;
   xSemaphoreGive(renderGo);
 }
@@ -74,6 +78,8 @@ static const render::Theme THEMES[] = {
   { {  0,  0,  0}, { 90, 90,110}, {170,170,190}, {255,255,255}, 35, 75, 200 },   // mercury
 };
 constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
+constexpr int MODE_COUNT  = THEME_COUNT + 1;      // last mode = heat convection
+constexpr int MODE_HEAT   = THEME_COUNT;
 
 // Map chip-frame (x, y) to screen-frame (+x right, +y down).
 static void mapAxes(int mode, float x, float y, float& ox, float& oy) {
@@ -121,7 +127,13 @@ struct Button {
 };
 static Button btnOrient{BTN_ORIENT}, btnReset{BTN_RESET}, btnTheme{BTN_THEME};
 
-static void applyTheme() { rend.setTheme(THEMES[theme]); }
+static void applyTheme() {
+  bool wasHeat = sim.heat;
+  sim.heat = (theme == MODE_HEAT);
+  if (sim.heat && !wasHeat)
+    for (int i = 0; i < sim.n; ++i) sim.temp[i] = sim.p.ambient;
+  rend.setTheme(THEMES[sim.heat ? 0 : theme]);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -134,7 +146,7 @@ void setup() {
   orientation = prefs.getInt("orientation2", 2) & 7;
   biasX = prefs.getFloat("biasX", 0.f);
   biasY = prefs.getFloat("biasY", 0.f);
-  theme       = prefs.getInt("theme", 0) % THEME_COUNT;
+  theme       = prefs.getInt("theme", 0) % MODE_COUNT;
 
   display::begin();
   imuOk = imu::begin();
@@ -175,10 +187,14 @@ void loop() {
     Serial.printf("calibrated: bias x=%+.3f y=%+.3f g\n", biasX, biasY);
     sim.reset(PARTICLES);
   }
-  if (btnTheme.pressed()) {
-    theme = (theme + 1) % THEME_COUNT;
+  // 'm' on the serial port does the same as the mode button (handy for testing)
+  bool serialMode = false;
+  while (Serial.available()) if (Serial.read() == 'm') serialMode = true;
+  if (btnTheme.pressed() || serialMode) {
+    theme = (theme + 1) % MODE_COUNT;
     prefs.putInt("theme", theme);
     applyTheme();
+    Serial.printf("mode -> %s\n", theme == MODE_HEAT ? "heat convection" : "theme");
   }
 
   // --- gravity from the IMU ---------------------------------------------

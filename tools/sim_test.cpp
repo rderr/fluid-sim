@@ -54,7 +54,13 @@ int main(int argc, char** argv) {
   float tiltG         = envf("TILT", 0.8f);
   int substeps        = (int)envf("SUBSTEPS", 2);
   bool hold           = envf("HOLD", 0) > 0;   // HOLD=1: constant gentle tilt the whole run
-  bool slosh          = envf("SLOSH", 0) > 0;  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
+  bool slosh          = envf("SLOSH", 0) > 0;
+  sim.heat            = envf("HEAT", 0) > 0;   // HEAT=1: convection on
+  sim.p.heatRate      = envf("HEATR", sim.p.heatRate);
+  sim.p.coolRate      = envf("COOLR", sim.p.coolRate);
+  sim.p.diffusion     = envf("DIFF", sim.p.diffusion);
+  sim.p.buoyancy      = envf("BUOY", sim.p.buoyancy);
+  sim.p.coolBulk      = envf("COOLB", sim.p.coolBulk);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
   const float dt = 1.f / (60.f * substeps);
   render::Theme th;
   th.thrRim  = (uint8_t)envf("THR_RIM", th.thrRim);
@@ -95,9 +101,10 @@ int main(int argc, char** argv) {
       // fluid height estimate: fraction of particles in lower half
       int lower = 0, leftWall = 0;
       for (int i = 0; i < sim.n; ++i) { if (sim.py[i] > fluid::H / 2) lower++; if (sim.px[i] < fluid::WALL + 0.5f) leftWall++; }
-      float sumV = 0; for (int i = 0; i < sim.n; ++i) sumV += sqrtf(sim.vx[i]*sim.vx[i] + sim.vy[i]*sim.vy[i]);
-      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% leftWall=%3d pairs=%d\n",
-             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, leftWall, sim.pairCount());
+      float sumV = 0, tmin = 1, tmax = 0;
+      for (int i = 0; i < sim.n; ++i) { sumV += sqrtf(sim.vx[i]*sim.vx[i] + sim.vy[i]*sim.vy[i]); if (sim.temp[i] < tmin) tmin = sim.temp[i]; if (sim.temp[i] > tmax) tmax = sim.temp[i]; }
+      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% leftWall=%3d pairs=%d T=%.2f [%.2f..%.2f]\n",
+             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, leftWall, sim.pairCount(), sim.meanTemp(), tmin, tmax);
       char path[512]; snprintf(path, sizeof path, "%s/frame_%03d.bmp", out, fr);
       writeBmp(path, rend.fb);
     }

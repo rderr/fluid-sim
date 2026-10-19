@@ -22,7 +22,19 @@ plugging it in for the first flash; after that plain uploads work.
 |---|---|
 | IO47 | Cycle the accelerometer-to-screen axis mapping. Saved to flash. |
 | IO48 | Short press: respawn the fluid. Hold 1.5 s with the board flat on a level table: calibrate the accelerometer bias ("level"), saved to flash. |
-| IO0 (BOOT) | Cycle colour theme (water, lava, slime, mercury). Saved to flash. |
+| IO0 (BOOT) | Cycle mode: water, lava, slime, mercury themes, then heat convection. Saved to flash. Typing `m` on the serial port does the same. |
+
+## Heat convection mode
+
+The last mode in the cycle gives every particle a temperature. The wall that
+gravity points at is a heater, the opposite wall is a cold sink, exposed
+surface particles cool toward ambient, and heat diffuses between neighbours.
+Hot fluid feels less gravity than the pool's average and rises; cool fluid
+sinks, so plumes and rolling cells form, and they lean with the board when
+you tilt it. Colours run deep blue (cold) through red and orange to white
+(hot). The knobs (`heatRate`, `coolRate`, `coolBulk`, `diffusion`,
+`buoyancy`) are documented in `src/fluid.h`; the harness previews it with
+`HEAT=1 HOLD=1 TILT=0`.
 
 **Orientation:** the default IMU-to-screen mapping (2) was checked on
 hardware. If the liquid ever runs sideways or uphill, press IO47 to cycle:
