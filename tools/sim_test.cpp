@@ -10,8 +10,13 @@
 #include "fluid.h"
 #include "render.h"
 
+static uint16_t gFrame[render::OUT_W * render::OUT_H];   // assembled from bands
+static void collectBand(int y0, int rows, const uint16_t* buf, void*) {
+  memcpy(gFrame + (size_t)y0 * render::OUT_W, buf, (size_t)rows * render::OUT_W * 2);
+}
+
 static void writeBmp(const char* path, const uint16_t* fb) {
-  const int W = render::W, H = render::H;
+  const int W = render::OUT_W, H = render::OUT_H;
   FILE* f = fopen(path, "wb");
   if (!f) return;
   int rowBytes = (W * 3 + 3) & ~3;
@@ -39,6 +44,7 @@ static void writeBmp(const char* path, const uint16_t* fb) {
 }
 
 int main(int argc, char** argv) {
+  setvbuf(stdout, nullptr, _IONBF, 0);   // keep output if a run dies
   const char* out = argc > 1 ? argv[1] : ".";
   int count = argc > 2 ? atoi(argv[2]) : 400;
   static fluid::Sim sim;
@@ -105,7 +111,7 @@ int main(int argc, char** argv) {
     auto t0 = std::chrono::steady_clock::now();
     for (int k = 0; k < substeps; ++k) sim.step(dt, gx, gy, omega, alpha);
     auto t1 = std::chrono::steady_clock::now();
-    rend.draw(sim);
+    rend.draw(sim, collectBand, nullptr);
     auto t2 = std::chrono::steady_clock::now();
     simTime += std::chrono::duration<double>(t1 - t0).count();
     renderTime += std::chrono::duration<double>(t2 - t1).count();
@@ -119,7 +125,7 @@ int main(int argc, char** argv) {
     }
     if (dumpEvery > 0 && t >= dumpStart && fr % dumpEvery == 0) {
       char path[512]; snprintf(path, sizeof path, "%s/anim_%04d.bmp", out, fr);
-      writeBmp(path, rend.fb);
+      writeBmp(path, gFrame);
     }
     if (fr % 30 == 0 || fr == frames - 1) {
       // fluid height estimate: fraction of particles in lower half
@@ -132,7 +138,7 @@ int main(int argc, char** argv) {
       printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% leftWall=%3d pairs=%d depth=%3.0fpx T=%.2f [%.2f..%.2f]\n",
              t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, leftWall, sim.pairCount(), fluid::H - topY, sim.meanTemp(), tmin, tmax);
       char path[512]; snprintf(path, sizeof path, "%s/frame_%03d.bmp", out, fr);
-      writeBmp(path, rend.fb);
+      writeBmp(path, gFrame);
     }
   }
   printf("bad samples: %d\n", bad);

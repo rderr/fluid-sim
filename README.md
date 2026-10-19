@@ -6,9 +6,16 @@
   <sub>Heat convection mode, rendered by the desktop harness at 2× (<code>HEAT=1 HOLD=1 SWAY=0.25</code>).</sub>
 </p>
 
-A particle fluid that sloshes around a 128×128 display when you tilt or
-shake the board. Runs on the [LOLIN S3 Mini Pro](https://www.wemos.cc/en/latest/s3/s3_mini_pro.html)
-(ESP32-S3, 0.85" TFT, QMI8658C IMU) at 50–60 fps with 780 particles, plus a
+A particle fluid that sloshes around a small display when you tilt, shake
+or twist the board. Runs at 50–60 fps on two ESP32-S3 boards from one
+codebase:
+
+- [LOLIN S3 Mini Pro](https://www.wemos.cc/en/latest/s3/s3_mini_pro.html):
+  0.85" 128×128 square panel, 780 particles, three buttons.
+- [Waveshare ESP32-S3-Touch-LCD-1.28](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28):
+  1.28" 240×240 round panel, a round tank, one button.
+
+Both have the QMI8658 IMU the sim is driven by, and both get the
 heat-convection mode where a heater follows gravity and plumes roll through
 the pool.
 
@@ -27,8 +34,9 @@ the pool.
 
 ## Hardware
 
-Just the board. No wiring. Everything used (TFT, IMU, three buttons) is on
-the LOLIN S3 Mini Pro. Pin assignments are in [docs/HARDWARE.md](docs/HARDWARE.md).
+Just the board. No wiring. Pin assignments for both boards are in
+[docs/HARDWARE.md](docs/HARDWARE.md); `src/board.h` is where a third board
+would go.
 
 ## Build and flash
 
@@ -38,8 +46,9 @@ extension or `pip install platformio` both work).
 ```
 git clone https://github.com/rderr/fluid-sim.git
 cd fluid-sim
-pio run -t upload
-pio device monitor      # optional: stats, button events, calibration output
+pio run -t upload                              # LOLIN S3 Mini Pro (default)
+pio run -e waveshare_s3_lcd_1_28 -t upload     # Waveshare 1.28" round
+pio device monitor                             # optional: stats, button events, calibration output
 ```
 
 **First flash on a board still running the factory MicroPython:** hold the
@@ -49,14 +58,19 @@ USB stack can't be reset into the bootloader by esptool. After that, plain
 
 ## Controls
 
+LOLIN (three buttons):
+
 | Button | Press | Hold 1.5 s |
 |---|---|---|
 | IO0 (BOOT) | Next mode: water, lava, slime, mercury, heat convection | |
 | IO47 | Next IMU-to-screen mapping (if the liquid falls the wrong way) | |
 | IO48 | Respawn the fluid | Calibrate level and gyro zero (board flat and still on a table) |
 
-Over the serial port, `m` cycles the mode and `p` toggles per-phase timing
-output.
+Waveshare (one button): press BOOT for the next mode, hold 1.5 s to
+calibrate, hold 4 s for the next IMU-to-screen mapping.
+
+Over the serial port on either board: `m` mode, `o` orientation, `r`
+respawn, `c` calibrate, `p` toggle per-phase timing output.
 
 ## Tuning
 
@@ -84,7 +98,8 @@ platformio.ini       board + build flags
 src/main.cpp         loop: IMU → physics → render → display; buttons, modes, settings
 src/fluid.h          particle fluid + heat convection (no Arduino deps)
 src/render.h         density splat → color LUT framebuffer (no Arduino deps)
-src/display.h        GC9107 driver, DMA SPI, double buffer
+src/board.h          per-board pins, domain size/shape, display scale
+src/display.h        GC9107 / GC9A01 driver, band DMA push
 src/imu.h            QMI8658C driver with retry + I2C bus recovery
 tools/sim_test.cpp   desktop harness: scripted tilt/shake, stats, BMP frames
 docs/                hardware, tuning, architecture notes

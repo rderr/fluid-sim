@@ -1,5 +1,10 @@
 # Hardware notes
 
+Two boards are supported; `src/board.h` selects one per build flag and holds
+everything board-specific. The second section covers the Waveshare board.
+
+## LOLIN S3 Mini Pro
+
 Target: **LOLIN S3 Mini Pro** by Wemos. ESP32-S3FH4R2 (4 MB flash, 2 MB
 PSRAM), 0.85" 128×128 TFT (GC9107), QMI8658C 6-axis IMU, three buttons, RGB
 LED, IR LED.
@@ -94,3 +99,56 @@ particles:
 
 That lands around 88% of the 320 KB. PSRAM is not used because the
 solver's random access patterns would be far slower through the cache.
+
+## Waveshare ESP32-S3-Touch-LCD-1.28
+
+ESP32-S3R2 (16 MB flash, 2 MB PSRAM), 1.28" round 240×240 IPS panel
+(GC9A01A), QMI8658 IMU, CST816S capacitive touch (not used yet), one BOOT
+button, battery connector with charger, USB-C through a **CH343P UART
+bridge** (not native USB).
+
+Sources: the [Waveshare wiki](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28)
+and TFT_eSPI's `Setup302_Waveshare_ESP32S3_GC9A01.h`, which agree on every
+pin below. Not yet verified on hardware by this project.
+
+| Function | GPIO | Notes |
+|---|---|---|
+| TFT SCK | 10 | |
+| TFT MOSI | 11 | |
+| TFT MISO | 12 | unused |
+| TFT CS | 9 | |
+| TFT DC | 8 | |
+| TFT RST | 14 | |
+| TFT backlight | 2 | active high |
+| I2C SDA | 6 | shared by IMU and touch |
+| I2C SCL | 7 | |
+| IMU INT1 / INT2 | 4 / 3 | unused |
+| Touch INT / RST | 5 / 13 | unused |
+| Battery ADC | 1 | 200k/100k divider |
+| BOOT button | 0 | to GND |
+| UART TX / RX | 43 / 44 | via CH343P: flashing and the serial log |
+
+**Display.** GC9A01 with the usual vendor init table, 40 MHz SPI, no
+offsets, `MADCTL 0x08`. The sim runs at 120×120 and is upsampled 2×
+bilinearly to 240×240 on the way out, so particle size and tuning match the
+LOLIN. The tank is a circle inscribed in the domain: the rim clamps
+particles, contributes ghost density, and the heater is the arc at the
+bottom of the rim along gravity.
+
+**Memory.** Two full 240×240 framebuffers (230 KB) would not fit next to the
+solver, so the renderer builds 20-row bands (40 display rows) and streams
+each over DMA while drawing the next. The same band path is used on the
+LOLIN, which freed 48 KB there.
+
+**Serial.** With the UART bridge, `Serial` is `HardwareSerial`; the firmware
+gives it a 1 KB TX buffer and only prints stats when there is room, since a
+UART write that waits for the FIFO would stall the frame loop.
+
+**IMU orientation.** The chip's mounting is not known for this board; the
+default mapping is the LOLIN's (2). If the liquid falls the wrong way, hold
+BOOT for 4 s (or send `o` on serial) to step through the eight mappings;
+the choice is saved to flash.
+
+**Particle count.** The lower half of the round tank holds about 520
+particles at the default spacing, so that is what spawns; the 780 setting
+is a ceiling, not a target.

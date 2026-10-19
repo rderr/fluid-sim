@@ -71,12 +71,23 @@ than the render task so it preempts drawing; the render has enough slack.
 Particles are splatted with a 7×7 kernel into an 8-bit density field,
 which goes through a 256-entry color LUT: below a rim threshold is
 background, a band above it is the bright rim, then body color darkening
-to a deep color. The field is built in 32-row bands to save 24 KB. In heat
-mode a second field accumulates temperature × weight; the per-pixel ratio
-indexes a thermal palette.
+to a deep color. In heat mode a second field accumulates temperature ×
+weight; the per-pixel ratio indexes a thermal palette.
 
-Framebuffers are RGB565 pre-swapped to big-endian so DMA can stream them
-unmodified.
+Everything is done per horizontal band: the field for one band (plus one
+extra row) is built, converted to RGB565 (bilinearly upsampled when the
+display is 2× the sim, as on the round board), and handed to a sink. The
+firmware's sink queues the band for DMA and returns; the renderer then
+draws the next band into its other buffer. There is no full framebuffer,
+which is what lets a 240×240 panel fit next to the solver. Pixels are
+pre-swapped to big-endian so DMA streams them unmodified.
+
+## Boards (`src/board.h`)
+
+A board is a set of defines: domain size and whether the tank is round,
+display scale and physical size, panel type and offsets, pins, and which
+buttons exist. Everything else is shared. `static_assert`s keep the band
+height dividing the domain height.
 
 ## Frame budget (780 particles, measured)
 

@@ -1,19 +1,29 @@
-// Renders the particle field into a 128x128 RGB565 framebuffer.
+// Renders the particle field into RGB565 display bands.
 // Particles are splatted into an 8-bit density field, which is then mapped
 // through a color LUT: this gives a metaball-style "liquid" look with a
-// bright rim at the surface. Pure C++, no Arduino deps.
+// bright rim at the surface. The field is built one horizontal band at a
+// time and handed to a sink per band, so no full framebuffer is needed.
+// With DISPLAY_SCALE 2 the field is bilinearly upsampled on the way out.
+// Pure C++, no Arduino deps.
 #pragma once
 #include <stdint.h>
 #include <string.h>
+#include "board.h"
 #include "fluid.h"
 
 namespace render {
 
-constexpr int W = fluid::W;
+constexpr int W = fluid::W;                 // simulation (field) size
 constexpr int H = fluid::H;
-constexpr int KR = 3;                 // splat kernel radius (px)
+constexpr int SCALE = DISPLAY_SCALE;
+constexpr int OUT_W = W * SCALE;            // display size
+constexpr int OUT_H = H * SCALE;
+constexpr int BAND = RENDER_BAND;           // field rows per band
+static_assert(H % BAND == 0, "RENDER_BAND must divide FLUID_H");
+constexpr int OUT_BAND = BAND * SCALE;      // display rows per band
+constexpr int KR = 3;                       // splat kernel radius (px)
 constexpr int KS = 2 * KR + 1;
-constexpr float KAMP = 60.f;          // splat kernel peak weight
+constexpr float KAMP = 60.f;                // splat kernel peak weight
 
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
@@ -42,15 +52,19 @@ static const Theme THEMES[] = {
 static const char* const THEME_NAMES[] = { "water", "lava", "slime", "mercury" };
 constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
 
+// Receives finished display bands: y0 and rows in display pixels, buf is
+// RGB565 byte-swapped, OUT_W wide. The renderer alternates two buffers, so a
+// sink that streams asynchronously must finish buf before the band after next.
+typedef void (*BandSink)(int y0, int rows, const uint16_t* buf, void* ctx);
+
 class Renderer {
 public:
-  uint16_t fbs[2][W * H];    // RGB565, byte-swapped for SPI; double-buffered
-  uint16_t* fb = fbs[0];     // buffer holding the most recently drawn frame
-  // The density fields are built one horizontal band at a time to save RAM.
-  static constexpr int BAND = 32;
-  uint8_t  field[BAND * W];
-  uint8_t  tfield[BAND * W];  // temperature * kernel weight (heat mode); fits a
-                              // byte because each term is <= its weight
+  // Two band buffers so one can stream while the next is drawn.
+  uint16_t bands[2][OUT_W * OUT_BAND];
+  // Field rows for one band plus one extra row for the bilinear upsample.
+  uint8_t  field[(BAND + 1) * W];
+  uint8_t  tfield[(BAND + 1) * W];   // temperature * kernel weight (heat mode);
+                                     // fits a byte because each term is <= its weight
   // Palette stretch: temperatures from heatLo..heatHi span the full thermal
   // palette (the pool rarely reaches 0 or 1).
   float heatLo = 0.3f, heatHi = 0.85f;
@@ -80,34 +94,34 @@ public:
     }
   }
 
-  void draw(const fluid::Sim& s) { draw(s.px, s.py, s.n, s.heat ? s.temp : nullptr); }
+  void draw(const fluid::Sim& s, BandSink sink, void* ctx) {
+    draw(s.px, s.py, s.n, s.heat ? s.temp : nullptr, sink, ctx);
+  }
 
-  // temps may be null (plain density rendering).
-  void draw(const float* xs, const float* ys, int n, const float* temps) {
-    fb = (fb == fbs[0]) ? fbs[1] : fbs[0];   // draw into the buffer not being sent
+  // temps may be null (plain density rendering). Calls sink once per band.
+  void draw(const float* xs, const float* ys, int n, const float* temps, BandSink sink, void* ctx) {
+    int which = 0;
     for (int y0 = 0; y0 < H; y0 += BAND) {
       memset(field, 0, sizeof(field));
       if (temps) memset(tfield, 0, sizeof(tfield));
-      const float lo = y0 - KR - 1.f, hi = y0 + BAND + KR + 1.f;
+      const float lo = y0 - KR - 1.f, hi = y0 + BAND + KR + 2.f;
       for (int i = 0; i < n; ++i) {
         float y = ys[i];
         if (y < lo || y > hi) continue;        // does not touch this band
         if (temps) splatT(xs[i], y - y0, temps[i]); else splat(xs[i], y - y0);
       }
-      const uint8_t* f = field;
-      uint16_t* o = fb + y0 * W;
-      if (!temps) {
-        for (int i = 0; i < W * BAND; ++i) o[i] = lut_[f[i]];
-      } else {
-        const uint8_t* tf = tfield;
-        for (int i = 0; i < W * BAND; ++i) {
-          int d = f[i];
-          if (d < thrRim_) { o[i] = bg_; continue; }
-          int t = (tf[i] << 8) / d;            // weighted mean temperature, 0..255
-          if (t > 255) t = 255;
-          o[i] = heatLut_[t];
+      uint16_t* out = bands[which];
+      which ^= 1;
+      if (SCALE == 1) {
+        if (!temps) {
+          for (int i = 0; i < W * BAND; ++i) out[i] = lut_[field[i]];
+        } else {
+          for (int i = 0; i < W * BAND; ++i) out[i] = heatPixel(field[i], tfield[i]);
         }
+      } else {
+        upsample(out, temps != nullptr);
       }
+      sink(y0 * SCALE, OUT_BAND, out, ctx);
     }
   }
 
@@ -117,6 +131,46 @@ private:
   uint16_t bg_ = 0;
   uint8_t  thrRim_ = 35;
   uint8_t  kernel_[KS * KS];
+
+  static inline uint8_t lerp(uint8_t a, uint8_t b, float f) {
+    return (uint8_t)(a + (b - a) * f + 0.5f);
+  }
+
+  inline uint16_t heatPixel(int d, int tf) const {
+    if (d < thrRim_) return bg_;
+    int t = (tf << 8) / d;                   // weighted mean temperature, 0..255
+    if (t > 255) t = 255;
+    return heatLut_[t];
+  }
+
+  // Bilinear upsample of the band's field (and temperature field) by SCALE.
+  // Output row oy samples field row (oy + 0.5) / SCALE - 0.5; the band's extra
+  // field row makes the last output rows interpolate correctly.
+  void upsample(uint16_t* out, bool heat) {
+    for (int oy = 0; oy < OUT_BAND; ++oy) {
+      float sy = (oy + 0.5f) / SCALE - 0.5f;
+      int y0 = (int)sy; if (sy < 0) { y0 = 0; sy = 0; }
+      int y1 = y0 + 1; if (y1 > BAND) y1 = BAND;
+      int fy = (int)((sy - y0) * 256.f);
+      const uint8_t* r0 = field + y0 * W; const uint8_t* r1 = field + y1 * W;
+      const uint8_t* t0 = tfield + y0 * W; const uint8_t* t1 = tfield + y1 * W;
+      uint16_t* o = out + oy * OUT_W;
+      for (int ox = 0; ox < OUT_W; ++ox) {
+        float sx = (ox + 0.5f) / SCALE - 0.5f;
+        int x0 = (int)sx; if (sx < 0) { x0 = 0; sx = 0; }
+        int x1 = x0 + 1; if (x1 >= W) x1 = W - 1;
+        int fx = (int)((sx - x0) * 256.f);
+        int top = r0[x0] * (256 - fx) + r0[x1] * fx;
+        int bot = r1[x0] * (256 - fx) + r1[x1] * fx;
+        int d = (top * (256 - fy) + bot * fy) >> 16;
+        if (!heat) { o[ox] = lut_[d]; continue; }
+        int ttop = t0[x0] * (256 - fx) + t0[x1] * fx;
+        int tbot = t1[x0] * (256 - fx) + t1[x1] * fx;
+        int tf = (ttop * (256 - fy) + tbot * fy) >> 16;
+        o[ox] = heatPixel(d, tf);
+      }
+    }
+  }
 
   // Thermal palette: deep blue -> purple -> red -> orange -> yellow -> white.
   void buildHeatLut() {
@@ -130,32 +184,6 @@ private:
       uint8_t b = lerp(stops[k][2], stops[k + 1][2], u);
       heatLut_[i] = swap16(rgb565(r, g, b));
     }
-  }
-
-  inline void splatT(float fx, float fy, float temp) {   // fy relative to the band
-    int cx = (int)(fx + 0.5f), cy = (int)floorf(fy + 0.5f);
-    int x0 = cx - KR, y0 = cy - KR;
-    int t8 = (int)((temp - heatLo) / (heatHi - heatLo) * 255.f + 0.5f);
-    if (t8 < 0) t8 = 0; if (t8 > 255) t8 = 255;
-    for (int ky = 0; ky < KS; ++ky) {
-      int y = y0 + ky;
-      if (y < 0 || y >= BAND) continue;
-      uint8_t* row = field + y * W; uint8_t* trow = tfield + y * W;
-      const uint8_t* krow = kernel_ + ky * KS;
-      for (int kx = 0; kx < KS; ++kx) {
-        int x = x0 + kx;
-        if (x < 0 || x >= W) continue;
-        int w = krow[kx];
-        int v = row[x] + w;
-        if (v > 255) { w -= v - 255; v = 255; }   // keep the two fields consistent
-        row[x] = (uint8_t)v;
-        trow[x] += (uint8_t)((w * t8) >> 8);
-      }
-    }
-  }
-
-  static inline uint8_t lerp(uint8_t a, uint8_t b, float f) {
-    return (uint8_t)(a + (b - a) * f + 0.5f);
   }
 
   void buildKernel() {
@@ -174,7 +202,7 @@ private:
     int x0 = cx - KR, y0 = cy - KR;
     for (int ky = 0; ky < KS; ++ky) {
       int y = y0 + ky;
-      if (y < 0 || y >= BAND) continue;
+      if (y < 0 || y > BAND) continue;        // band rows plus the extra row
       uint8_t* row = field + y * W;
       const uint8_t* krow = kernel_ + ky * KS;
       for (int kx = 0; kx < KS; ++kx) {
@@ -182,6 +210,28 @@ private:
         if (x < 0 || x >= W) continue;
         int v = row[x] + krow[kx];
         row[x] = v > 255 ? 255 : (uint8_t)v;
+      }
+    }
+  }
+
+  inline void splatT(float fx, float fy, float temp) {   // fy relative to the band
+    int cx = (int)(fx + 0.5f), cy = (int)floorf(fy + 0.5f);
+    int x0 = cx - KR, y0 = cy - KR;
+    int t8 = (int)((temp - heatLo) / (heatHi - heatLo) * 255.f + 0.5f);
+    if (t8 < 0) t8 = 0; if (t8 > 255) t8 = 255;
+    for (int ky = 0; ky < KS; ++ky) {
+      int y = y0 + ky;
+      if (y < 0 || y > BAND) continue;
+      uint8_t* row = field + y * W; uint8_t* trow = tfield + y * W;
+      const uint8_t* krow = kernel_ + ky * KS;
+      for (int kx = 0; kx < KS; ++kx) {
+        int x = x0 + kx;
+        if (x < 0 || x >= W) continue;
+        int w = krow[kx];
+        int v = row[x] + w;
+        if (v > 255) { w -= v - 255; v = 255; }   // keep the two fields consistent
+        row[x] = (uint8_t)v;
+        trow[x] += (uint8_t)((w * t8) >> 8);
       }
     }
   }

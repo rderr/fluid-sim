@@ -3,11 +3,12 @@
 #pragma once
 #include <Arduino.h>
 #include <Wire.h>
+#include "board.h"
 
 namespace imu {
 
-constexpr int PIN_SDA = 12;
-constexpr int PIN_SCL = 11;
+constexpr int PIN_SDA = PIN_IMU_SDA;
+constexpr int PIN_SCL = PIN_IMU_SCL;
 
 constexpr uint8_t REG_WHO_AM_I = 0x00;   // reads 0x05
 constexpr uint8_t REG_CTRL1    = 0x02;

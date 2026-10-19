@@ -5,26 +5,29 @@
 // frame the liquid feels an effective gravity equal to minus that vector, so
 // tilting AND shaking the board both slosh the fluid correctly.
 //
-// Buttons:
+// Controls (LOLIN, three buttons):
 //   IO47  cycle the accelerometer-to-screen axis mapping (saved to flash).
-//         If the water runs "uphill", press until it falls the right way.
-//   IO48  short press: respawn the fluid.
-//         hold 1.5 s with the board lying flat and still on a level surface:
-//         calibrate the accelerometer x/y and gyro z bias (saved to flash).
-//   IO0   cycle mode: water, lava, slime, mercury themes, then heat
-//         convection (heater on whichever wall gravity points at).
-// Serial: 'm' = same as IO0, 'p' = toggle per-phase profiling output.
+//   IO48  short press: respawn. Hold 1.5 s flat and still: calibrate level
+//         and gyro zero (saved to flash).
+//   IO0   cycle mode: water, lava, slime, mercury themes, then heat convection.
+// Controls (Waveshare, one button):
+//   BOOT  press: next mode. Hold 1.5 s: calibrate. Hold 4 s: next axis mapping.
+// Serial (both): 'm' mode, 'o' orientation, 'r' respawn, 'c' calibrate,
+//   'p' toggle per-phase profiling output.
 #include <Arduino.h>
 #include <Preferences.h>
 #include <driver/gpio.h>
+#include "board.h"
 #include "fluid.h"
 #include "render.h"
 #include "display.h"
 #include "imu.h"
 
-constexpr int BTN_ORIENT = 47;
-constexpr int BTN_RESET  = 48;
-constexpr int BTN_THEME  = 0;
+constexpr int BTN_THEME  = PIN_BTN_MODE;
+#if HAS_THREE_BUTTONS
+constexpr int BTN_ORIENT = PIN_BTN_ORIENT;
+constexpr int BTN_RESET  = PIN_BTN_RESET;
+#endif
 
 constexpr int   PARTICLES   = 780;
 constexpr int   SUBSTEPS    = 2;             // physics substeps per rendered frame
@@ -45,13 +48,16 @@ static bool  snapHeat = false;
 static SemaphoreHandle_t renderGo, renderDone;
 static uint32_t drawUsAcc = 0;
 
+static void bandSink(int y0, int rows, const uint16_t* buf, void*) {
+  display::pushBand(y0, rows, buf);       // waits for the previous band's DMA, queues this one
+}
+
 static void renderTask(void*) {
   for (;;) {
     xSemaphoreTake(renderGo, portMAX_DELAY);
     uint32_t t0 = micros();
-    rend.draw(snapX, snapY, snapN, snapHeat ? snapT : nullptr);
+    rend.draw(snapX, snapY, snapN, snapHeat ? snapT : nullptr, bandSink, nullptr);
     drawUsAcc += micros() - t0;
-    display::pushFrame(rend.fb);            // waits for the previous DMA, queues this one
     xSemaphoreGive(renderDone);
   }
 }
@@ -131,7 +137,7 @@ struct Button {
   static constexpr uint32_t HOLD_MS = 50;
   bool pressed() {
     uint32_t t = millis();
-    if (buttonRead(pin) == HIGH) { lowSince = 0; armed = true; longFired = false; return false; }
+    if (buttonRead(pin) == HIGH) { lowSince = 0; armed = true; longFired = longFired2 = false; return false; }
     if (lowSince == 0) { lowSince = t; return false; }
     if (armed && t - lowSince >= HOLD_MS) { armed = false; return true; }
     return false;
@@ -142,9 +148,18 @@ struct Button {
     if (millis() - lowSince >= ms) { longFired = true; return true; }
     return false;
   }
-  bool longFired = false;
+  // A second, longer threshold on the same hold.
+  bool heldFor2(uint32_t ms) {
+    if (longFired2 || lowSince == 0 || buttonRead(pin) == HIGH) return false;
+    if (millis() - lowSince >= ms) { longFired2 = true; return true; }
+    return false;
+  }
+  bool longFired = false, longFired2 = false;
 };
-static Button btnOrient{BTN_ORIENT}, btnReset{BTN_RESET}, btnTheme{BTN_THEME};
+static Button btnTheme{BTN_THEME};
+#if HAS_THREE_BUTTONS
+static Button btnOrient{BTN_ORIENT}, btnReset{BTN_RESET};
+#endif
 
 static void applyTheme() {
   bool wasHeat = sim.heat;
@@ -155,12 +170,20 @@ static void applyTheme() {
 }
 
 void setup() {
+#if SERIAL_IS_USB_CDC
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);                 // never block the frame loop on a host that isn't reading
+#else
+  Serial.setTxBufferSize(1024);             // UART bridge: buffer so stats never block the loop
+  Serial.begin(115200);
+#endif
   delay(200);                               // let the panel's supply settle after reset
+  buttonInit(BTN_THEME);
+#if HAS_THREE_BUTTONS
   buttonInit(BTN_ORIENT);
   buttonInit(BTN_RESET);
-  buttonInit(BTN_THEME);
+#endif
+  sim.p.displayMm = DISPLAY_MM;
 
   prefs.begin("fluid", false);
   orientation = prefs.getInt("orientation2", 2) & 7;
@@ -169,7 +192,7 @@ void setup() {
   biasW = prefs.getFloat("biasW", 0.f);
   theme       = prefs.getInt("theme", 0) % MODE_COUNT;
 
-  display::begin();
+  display::begin(sizeof(rend.bands[0]));
   imuOk = imu::begin();
 
   sim.reset(PARTICLES);
@@ -188,10 +211,10 @@ void setup() {
   display::setBacklight(true);
 
   Serial.printf("loop on core %d\n", xPortGetCoreID());
-  Serial.printf("fluid sim: %d particles, IMU %s (0x%02X), orientation %d (saved %s), bias (%+.3f,%+.3f) g, theme %d, IO47=%d IO48=%d IO0=%d\n",
-                sim.n, imuOk ? "ok" : "NOT FOUND - demo mode", imu::address(), orientation,
-                prefs.isKey("orientation2") ? "present" : "absent", biasX, biasY, theme,
-                buttonRead(BTN_ORIENT), buttonRead(BTN_RESET), buttonRead(BTN_THEME));
+  Serial.printf("fluid sim on %s: %d particles, %dx%d%s domain -> %dx%d display, IMU %s (0x%02X), orientation %d (saved %s), bias (%+.3f,%+.3f) g, theme %d\n",
+                BOARD_NAME, sim.n, fluid::W, fluid::H, fluid::CIRCLE ? " round" : "", display::W, display::H,
+                imuOk ? "ok" : "NOT FOUND - demo mode", imu::address(), orientation,
+                prefs.isKey("orientation2") ? "present" : "absent", biasX, biasY, theme);
 }
 
 void loop() {
@@ -203,32 +226,46 @@ void loop() {
   uint32_t frameStart = micros();
 
   // --- input -------------------------------------------------------------
-  if (btnOrient.pressed()) {
+  // Serial: 'm' mode, 'o' orientation, 'r' respawn, 'c' calibrate, 'p' profiling.
+  bool doMode = false, doOrient = false, doRespawn = false, doCalib = false;
+  while (Serial.available()) {
+    int c = Serial.read();
+    if (c == 'm') doMode = true;
+    if (c == 'o') doOrient = true;
+    if (c == 'r') doRespawn = true;
+    if (c == 'c') doCalib = true;
+    if (c == 'p') profiling = !profiling;
+  }
+#if HAS_THREE_BUTTONS
+  if (btnOrient.pressed()) doOrient = true;
+  if (btnReset.pressed())  doRespawn = true;
+  if (btnReset.heldFor(1500)) doCalib = true;
+  if (btnTheme.pressed())  doMode = true;
+#else
+  // One button: press = next mode, hold 1.5 s = calibrate, hold 4 s = next orientation.
+  if (btnTheme.pressed())      doMode = true;
+  if (btnTheme.heldFor(1500))  doCalib = true;
+  if (btnTheme.heldFor2(4000)) doOrient = true;
+#endif
+  if (doOrient) {
     orientation = (orientation + 1) & 7;
     prefs.putInt("orientation2", orientation);
-    Serial.printf("orientation -> %d (button IO47 held %lu ms)\n", orientation, (unsigned long)(millis() - btnOrient.lowSince));
+    Serial.printf("orientation -> %d\n", orientation);
   }
-  if (btnReset.pressed()) sim.reset(PARTICLES);
-  if (btnReset.heldFor(1500)) {
-    // Board is assumed flat on a level surface: x/y should read zero.
+  if (doRespawn) sim.reset(PARTICLES);
+  if (doCalib) {
+    // Board is assumed flat and still on a level surface: x/y and spin read zero.
     biasX = fAx + biasX; biasY = fAy + biasY;   // fAx/fAy are already bias-corrected
-    biasW = rawW + biasW;                       // board is still: gyro should read zero
+    biasW = rawW + biasW;
     prefs.putFloat("biasX", biasX); prefs.putFloat("biasY", biasY); prefs.putFloat("biasW", biasW);
     Serial.printf("calibrated: bias x=%+.3f y=%+.3f g, gyro z %+.2f dps\n", biasX, biasY, biasW);
     sim.reset(PARTICLES);
   }
-  // 'm' on the serial port does the same as the mode button (handy for testing)
-  bool serialMode = false;
-  while (Serial.available()) {
-    int c = Serial.read();
-    if (c == 'm') serialMode = true;
-    if (c == 'p') profiling = !profiling;
-  }
-  if (btnTheme.pressed() || serialMode) {
+  if (doMode) {
     theme = (theme + 1) % MODE_COUNT;
     prefs.putInt("theme", theme);
     applyTheme();
-    Serial.printf("mode -> %s\n", theme == MODE_HEAT ? "heat convection" : "theme");
+    Serial.printf("mode -> %s\n", theme == MODE_HEAT ? "heat convection" : render::THEME_NAMES[theme]);
   }
 
   // --- gravity from the IMU ---------------------------------------------
@@ -270,7 +307,12 @@ void loop() {
   frames++;
   uint32_t thisFrame = micros() - frameStart; if (thisFrame > maxFrameUs) maxFrameUs = thisFrame;
   uint32_t now = millis();
-  if (now - statT >= 2000 && Serial) {      // only when a host is listening
+#if SERIAL_IS_USB_CDC
+  bool canPrint = (bool)Serial;              // only when a host is listening
+#else
+  bool canPrint = Serial.availableForWrite() > 400;   // never block on a full UART buffer
+#endif
+  if (now - statT >= 2000 && canPrint) {
     Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)  spin %+.2f rad/s\n",
                   frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames, sim.pairCount(),
                   maxFrameUs / 1000.f, maxImuUs / 1000.f, maxSimUs / 1000.f, maxSubmitUs / 1000.f,

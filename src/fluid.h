@@ -7,11 +7,13 @@
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
+#include "board.h"
 
 namespace fluid {
 
-constexpr int W = 128;
-constexpr int H = 128;
+constexpr int  W = FLUID_W;
+constexpr int  H = FLUID_H;
+constexpr bool CIRCLE = FLUID_CIRCLE != 0;   // round tank inscribed in the domain
 constexpr int MAX_P = 832;
 
 constexpr float RADIUS = 6.0f;     // interaction radius h (px)
@@ -20,6 +22,8 @@ constexpr int   GW = (W + CELL - 1) / CELL;
 constexpr int   GH = (H + CELL - 1) / CELL;
 constexpr int   CELLS = GW * GH;
 constexpr float WALL = 1.5f;       // wall margin (px)
+constexpr float CX = W * 0.5f, CY = H * 0.5f;          // domain center
+constexpr float CR = (W < H ? W : H) * 0.5f - WALL;    // round-tank radius
 
 // Quake-style inverse square root with one Newton step (~0.2% error);
 // the ESP32-S3 has no hardware sqrt and this runs ~10x faster than sqrtf.
@@ -95,7 +99,7 @@ struct Params {
   // Sets the real-world scale of a pixel, which the spin forces need: they
   // grow with the real radius, so a 15 mm panel swirls far less than a
   // meter-wide tank would. LOLIN S3 Mini Pro: 0.85" square panel.
-  float displayMm     = 15.3f;
+  float displayMm     = DISPLAY_MM;
 
   // Spin response. When the board rotates about the screen normal the
   // fluid, in the board's frame, feels the Euler force (lag when the spin
@@ -181,7 +185,12 @@ public:
     float yMin = H * (1.0f - fill);
     while (n < count && y > yMin) {
       for (int c = 0; c < cols && n < count; ++c) {
-        px[n] = x0 + c * spacing + ((int)(y / spacing) & 1 ? spacing * 0.25f : 0.f);
+        float x = x0 + c * spacing + ((int)(y / spacing) & 1 ? spacing * 0.25f : 0.f);
+        if (CIRCLE) {
+          float dx = x - CX, dy = y - CY;
+          if (dx * dx + dy * dy > (CR - spacing * 0.5f) * (CR - spacing * 0.5f)) continue;
+        }
+        px[n] = x;
         py[n] = y;
         vx[n] = vy[n] = 0.f;
         temp[n] = p.ambient;
@@ -220,7 +229,7 @@ public:
       // gravity scale (p.gravity px/s^2 per 9.81 m/s^2)
       const float mPerPx = p.displayMm * 1e-3f / W;
       const float g = p.spinGain * mPerPx * (p.gravity / 9.81f) * dt;
-      const float w2 = omega * omega, cx = W * 0.5f, cy = H * 0.5f;
+      const float w2 = omega * omega, cx = CX, cy = CY;
       for (int i = 0; i < n; ++i) {
         float rx = px[i] - cx, ry = py[i] - cy;
         float fx = w2 * rx + alpha * ry + 2.f * omega * vy[i];
@@ -278,7 +287,21 @@ public:
     const float invH = 1.0f / h;
     if (heat) heatStep(dt, gx, gy, invH);
     lap(5);
-    if (p.wallDensity > 0.f) {
+    if (CIRCLE && p.wallDensity > 0.f) {
+      for (int i = 0; i < n; ++i) {
+        float dx = px[i] - CX, dy = py[i] - CY;
+        float r2 = dx * dx + dy * dy;
+        if (r2 < 1e-6f) continue;
+        float invR = fastInvSqrt(r2);
+        float q = (CR - r2 * invR) * invH;          // distance to the rim, as q
+        if (q < 1.f) {
+          float a = 1.f - (q < 0.f ? 0.f : q);
+          rho_[i]  += a * a * p.wallDensity;
+          rhoN_[i] += a * a * a * p.wallDensity;
+          wn_[i] = a;                               // remembered for the push below
+        } else wn_[i] = 0.f;
+      }
+    } else if (p.wallDensity > 0.f) {
       for (int i = 0; i < n; ++i) {
         // nearest distance to each wall, as q = d/h
         float qs[4] = { (px[i] - WALL) * invH, (W - WALL - px[i]) * invH,
@@ -298,7 +321,20 @@ public:
       dx_[i] = dy_[i] = 0.f;
     }
     const float dt2 = dt * dt;
-    if (p.wallDensity > 0.f) {
+    if (CIRCLE && p.wallDensity > 0.f) {
+      // the rim pushes back toward the center like an immovable neighbor
+      for (int i = 0; i < n; ++i) {
+        float a = wn_[i];
+        if (a <= 0.f) continue;
+        float dx = px[i] - CX, dy = py[i] - CY;
+        float r2 = dx * dx + dy * dy;
+        if (r2 < 1e-6f) continue;
+        float invR = fastInvSqrt(r2);
+        float D = dt2 * (pr_[i] * a + prN_[i] * a * a) * p.wallDensity * 0.5f;
+        if (D < 0.f) D = 0.f;
+        dx_[i] -= D * dx * invR; dy_[i] -= D * dy * invR;
+      }
+    } else if (p.wallDensity > 0.f) {
       // the wall pushes back like an immovable neighbor
       for (int i = 0; i < n; ++i) {
         float qs[4] = { (px[i] - WALL) * invH, (W - WALL - px[i]) * invH,
@@ -342,8 +378,14 @@ public:
       if (!(px[i] == px[i]) || !(py[i] == py[i])) {   // NaN guard: respawn at the center
         px[i] = W * 0.5f; py[i] = H * 0.5f; ox_[i] = px[i]; oy_[i] = py[i];
       }
-      if (px[i] < WALL) px[i] = WALL; else if (px[i] > W - WALL) px[i] = W - WALL;
-      if (py[i] < WALL) py[i] = WALL; else if (py[i] > H - WALL) py[i] = H - WALL;
+      if (CIRCLE) {
+        float dx = px[i] - CX, dy = py[i] - CY;
+        float r2 = dx * dx + dy * dy;
+        if (r2 > CR * CR) { float s = CR * fastInvSqrt(r2); px[i] = CX + dx * s; py[i] = CY + dy * s; }
+      } else {
+        if (px[i] < WALL) px[i] = WALL; else if (px[i] > W - WALL) px[i] = W - WALL;
+        if (py[i] < WALL) py[i] = WALL; else if (py[i] > H - WALL) py[i] = H - WALL;
+      }
       vx[i] = (px[i] - ox_[i]) * invDt;
       vy[i] = (py[i] - oy_[i]) * invDt;
     }
@@ -369,15 +411,26 @@ private:
     float hotEdge, coldEdge;
     if (horizontal) { hotEdge = gx > 0 ? W - WALL : WALL; coldEdge = gx > 0 ? WALL : W - WALL; }
     else            { hotEdge = gy > 0 ? H - WALL : WALL; coldEdge = gy > 0 ? WALL : H - WALL; }
+    // Round tank: measure along gravity instead; the heater is the arc at
+    // the bottom of the rim, the cold sink the arc at the top.
+    float gm2 = gx * gx + gy * gy; if (gm2 < 1e-4f) gm2 = 1e-4f;
+    float ginv = fastInvSqrt(gm2), ux = gx * ginv, uy = gy * ginv;
     float meanRho = 0; for (int i = 0; i < n; ++i) meanRho += rho_[i];
     meanRho = n ? meanRho / n : 1.f;
     const float surfaceRho = 0.7f * meanRho;        // sparse neighborhood = exposed surface
     const float bulk = p.coolBulk * dt;
     for (int i = 0; i < n; ++i) {
-      float c = horizontal ? px[i] : py[i];
-      float dh = hotEdge - c, dc = coldEdge - c;
-      float qh = (dh < 0 ? -dh : dh) * invH;      // 0 at the hot wall, 1 at h away
-      float qc = (dc < 0 ? -dc : dc) * invH;
+      float qh, qc;
+      if (CIRCLE) {
+        float d = (px[i] - CX) * ux + (py[i] - CY) * uy;   // position along gravity
+        qh = (CR - d) * invH;                              // 0 at the bottom of the rim
+        qc = (CR + d) * invH;                              // 0 at the top
+      } else {
+        float c = horizontal ? px[i] : py[i];
+        float dh = hotEdge - c, dc = coldEdge - c;
+        qh = (dh < 0 ? -dh : dh) * invH;      // 0 at the hot wall, 1 at h away
+        qc = (dc < 0 ? -dc : dc) * invH;
+      }
       float T = temp[i];
       if (qh < 1.f) { float a = 1.f - (qh < 0 ? 0 : qh); T += p.heatRate * dt * a * (1.f - T); }
       if (qc < 1.f) { float a = 1.f - (qc < 0 ? 0 : qc); T += p.coolRate * dt * a * (0.f - T); }
@@ -419,6 +472,7 @@ private:
   float rho_[MAX_P], rhoN_[MAX_P], pr_[MAX_P], prN_[MAX_P];
   float dx_[MAX_P], dy_[MAX_P];
   float rhoB_[MAX_P], rhoNB_[MAX_P], dxB_[MAX_P], dyB_[MAX_P];   // helper's partial sums
+  float wn_[MAX_P];                  // round tank: rim ghost-density weight per particle
   float dt2_ = 0.f;
   uint32_t stepCount_ = 0;
 
