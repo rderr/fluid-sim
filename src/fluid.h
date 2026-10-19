@@ -91,15 +91,23 @@ struct Params {
   // step; it should rarely be reached. Lower only if shakes look wrong.
   float maxSpeed      = 0.9f * CELL * 60.f;
 
+  // Physical size of the display's active area (mm across the W pixels).
+  // Sets the real-world scale of a pixel, which the spin forces need: they
+  // grow with the real radius, so a 15 mm panel swirls far less than a
+  // metre-wide tank would. LOLIN S3 Mini Pro: 0.85" square panel.
+  float displayMm     = 15.3f;
+
   // Spin response. When the board rotates about the screen normal the
   // fluid, in the board's frame, feels the Euler force (lag when the spin
   // starts or stops: this is the swirl), the centrifugal force (pushes
   // outward into the walls while spinning) and the Coriolis force (curves
-  // the flow). All three are scaled by this gain; 0 turns them off.
+  // the flow). They are computed at real scale from displayMm and brought
+  // into sim units through the same factor as gravity, so 1.0 means
+  // "as real life"; this gain exaggerates or mutes that. 0 turns them off.
   //   up:   a flick of the wrist sends the pool around the box, steady
   //         spinning plasters it against the walls.
   //   down: only fast spins have a visible effect.
-  float spinGain      = 0.3f;   // 1.0 is the physical strength at the sim scale: too lively for a hand-held board
+  float spinGain      = 1.0f;
 
   // ---- Heat convection (only used when heat is enabled) ----------------
   // Temperatures run 0 (cold) to 1 (heater). The wall that gravity points
@@ -208,7 +216,11 @@ public:
     //     taken about the box centre: centrifugal w^2 r, Euler -alpha x r,
     //     Coriolis -2 w x v (screen frame: x right, y down, z into screen)
     if (p.spinGain > 0.f && (omega != 0.f || alpha != 0.f)) {
-      const float g = p.spinGain * dt, w2 = omega * omega, cx = W * 0.5f, cy = H * 0.5f;
+      // real metres per pixel, then physical m/s^2 -> sim px/s^2 via the
+      // gravity scale (p.gravity px/s^2 per 9.81 m/s^2)
+      const float mPerPx = p.displayMm * 1e-3f / W;
+      const float g = p.spinGain * mPerPx * (p.gravity / 9.81f) * dt;
+      const float w2 = omega * omega, cx = W * 0.5f, cy = H * 0.5f;
       for (int i = 0; i < n; ++i) {
         float rx = px[i] - cx, ry = py[i] - cy;
         float fx = w2 * rx + alpha * ry + 2.f * omega * vy[i];

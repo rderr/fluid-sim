@@ -18,7 +18,7 @@ The parameters map onto everyday descriptions:
 | "feels like a thimble" / "feels like a big tank" | `gravity` | down / up |
 | "it twitches when my hand shakes" | `ACCEL_ALPHA` (main.cpp) | down |
 | "a film sticks to the wall" | `wallDensity` | up |
-| "twisting the board should swirl it more / less" | `spinGain` | up / down |
+| "twisting the board should swirl it more / less" | `spinGain` (1.0 = real life at `displayMm` scale) | up / down |
 | "surface shimmers when still" | `viscSigma` up, or `stiffness` down | |
 | "droplets are too big" | `RADIUS`, particle count | down, up |
 | "edges too blobby" | `KR`, `thrBody` (render.h) | down |
