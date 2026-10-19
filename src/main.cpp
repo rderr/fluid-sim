@@ -28,8 +28,8 @@ constexpr int BTN_THEME  = 0;
 
 constexpr int   PARTICLES   = 640;
 constexpr int   SUBSTEPS    = 2;             // physics substeps per rendered frame
-constexpr float FRAME_MIN   = 1.f / 70.f;    // measured frame time is clamped to this range
-constexpr float FRAME_MAX   = 1.f / 40.f;    // so the fluid keeps real-time speed at any fps
+constexpr float SUB_DT      = 1.f / 120.f;   // fixed: the relaxation scheme's stability depends
+                                             // on dt, so it must not follow the frame rate
 constexpr float ACCEL_ALPHA = 0.2f;          // IMU low-pass (per frame); lower = smoother
 constexpr float ACCEL_MAX   = 2.5f;          // clamp shakes to +/-2.5 g
 
@@ -196,7 +196,6 @@ void setup() {
 
 void loop() {
   static uint32_t lastFrame = micros();
-  static float lastFrameDt = 1.f / 60.f;
   static uint32_t statT = millis();
   static int frames = 0;
   static uint32_t simUs = 0;
@@ -252,9 +251,7 @@ void loop() {
 
   // --- simulate + draw ---------------------------------------------------
   uint32_t t0 = micros();
-  float frameDt = lastFrameDt;
-  if (frameDt < FRAME_MIN) frameDt = FRAME_MIN; else if (frameDt > FRAME_MAX) frameDt = FRAME_MAX;
-  for (int s = 0; s < SUBSTEPS; ++s) sim.step(frameDt / SUBSTEPS, gx, gy);
+  for (int s = 0; s < SUBSTEPS; ++s) sim.step(SUB_DT, gx, gy);
   uint32_t thisSim = micros() - t0; simUs += thisSim; if (thisSim > maxSimUs) maxSimUs = thisSim;
   uint32_t subT0 = micros();
   submitFrame();                            // hands the frame to core 0
@@ -289,7 +286,5 @@ void loop() {
   // Pace to ~60 fps so the physics timestep stays honest.
   uint32_t frameUs = micros() - lastFrame;
   if (frameUs < 16667) delayMicroseconds(16667 - frameUs);
-  uint32_t nowUs = micros();
-  lastFrameDt = (nowUs - lastFrame) * 1e-6f;
-  lastFrame = nowUs;
+  lastFrame = micros();
 }

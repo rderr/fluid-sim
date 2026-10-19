@@ -61,7 +61,8 @@ int main(int argc, char** argv) {
   sim.p.diffusion     = envf("DIFF", sim.p.diffusion);
   sim.p.buoyancy      = envf("BUOY", sim.p.buoyancy);
   sim.p.coolBulk      = envf("COOLB", sim.p.coolBulk);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
-  const float dt = 1.f / (60.f * substeps);
+  float fps = envf("FPS", 60.f);            // frame rate the substeps are sized for
+  const float dt = 1.f / (fps * substeps);
   render::Theme th;
   th.thrRim  = (uint8_t)envf("THR_RIM", th.thrRim);
   th.thrBody = (uint8_t)envf("THR_BODY", th.thrBody);

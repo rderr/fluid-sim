@@ -49,8 +49,8 @@ silently redirect it, so the buttons use the raw IDF GPIO API.
 
 - `src/fluid.h` is a Clavet-style particle fluid (double density relaxation
   with a near-pressure term) on a 22x22 spatial hash. 640 particles, two
-  substeps per frame sized from the measured frame time so the fluid keeps
-  real-time speed. Neighbour pairs are found once per substep into a compact
+  fixed 1/120 s substeps per frame (the relaxation scheme is only stable at
+  a fixed step, so a sub-60 fps frame plays slightly slow rather than wobble). Neighbour pairs are found once per substep into a compact
   list that the viscosity, density and relaxation passes all reuse. Pair
   discovery, density, displacement and geometry refresh are split between
   both cores (a helper task on core 0 takes half the grid rows / pairs), and
