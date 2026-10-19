@@ -30,14 +30,53 @@ static inline float fastInvSqrt(float x) {
   return y * (1.5f - 0.5f * x * y * y);
 }
 
+// Tuning knobs. Each comment says what you see on the screen when the value
+// goes up or down. Changes can be previewed with tools/sim_test.cpp before
+// flashing (env vars RHO0, K, KN, SIGMA, BETA, GRAV).
 struct Params {
-  float restDensity   = 2.0f;     // rho0: cohesion; higher beads up and clings more
-  float stiffness     = 3500.f;   // k: lower = more compressible / squishier
-  float nearStiffness = 7000.f;   // k_near (anti-clustering)
-  float viscSigma     = 3.0f;     // linear viscosity: damps rest jitter and small sloshes
-  float viscBeta      = 0.5f;     // quadratic viscosity: impact damping on hard splashes
-  float gravity       = 500.f;    // px/s^2 per 1 g (lower = behaves like a bigger tank)
-  float maxSpeed      = 0.9f * CELL * 60.f;  // px/s; cap so particles never skip a cell per step
+  // Cohesion / surface tension. Sum of (1-q)^2 over neighbours at rest.
+  //   up:   liquid beads up, holds together, clings to walls, fewer stray
+  //         droplets; too high and it clumps into lumps and looks lumpy.
+  //   down: falls apart easily into spray, wets walls less, flatter surface;
+  //         too low and it never gathers back into one body.
+  float restDensity   = 2.0f;
+
+  // Pressure stiffness. How hard the liquid resists being compressed.
+  //   up:   firmer, more incompressible, bounces off walls, slosh waves
+  //         travel faster; too high and the surface shimmers or boils.
+  //   down: squishier, packs down against walls when tilted, waves are
+  //         slower and softer; too low and the volume visibly shrinks.
+  float stiffness     = 3500.f;
+
+  // Near-pressure (anti-clustering). Keeps particles from stacking on top
+  // of each other; usually kept at ~2x stiffness.
+  //   up:   more even spacing, smoother interior, slightly more jitter.
+  //   down: particles bunch into dense knots and holes open in the body.
+  float nearStiffness = 7000.f;
+
+  // Linear viscosity. Thickness: water vs honey.
+  //   up:   thicker, settles faster, surface calms quickly, small tilts
+  //         produce slow smooth flow; too high and it crawls like syrup.
+  //   down: more watery, livelier, surface ripples longer; too low and it
+  //         jitters at rest and over-reacts to tiny movements.
+  float viscSigma     = 3.0f;
+
+  // Quadratic viscosity. Only acts on fast collisions, so it damps splashes
+  // without thickening gentle flow.
+  //   up:   hard shakes land with a dull thud, fewer and lower droplets.
+  //   down: violent splashes, droplets fly high and bounce.
+  float viscBeta      = 0.5f;
+
+  // Gravity scale, px/s^2 per 1 g measured by the IMU.
+  //   up:   heavier and faster, behaves like a thimble: everything happens
+  //         at once and small tilts already pour it to one side.
+  //   down: lighter and slower, behaves like a large tank: lazy sloshing,
+  //         gentle tilts only tip the surface.
+  float gravity       = 500.f;
+
+  // Speed cap, px/s. Safety limit so no particle skips a grid cell in one
+  // step; it should rarely be reached. Lower only if shakes look wrong.
+  float maxSpeed      = 0.9f * CELL * 60.f;
 };
 
 class Sim {
