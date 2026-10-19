@@ -8,7 +8,9 @@
 // Buttons:
 //   IO47  cycle the accelerometer-to-screen axis mapping (saved to flash).
 //         If the water runs "uphill", press until it falls the right way.
-//   IO48  respawn the fluid.
+//   IO48  short press: respawn the fluid.
+//         hold 1.5 s with the board lying flat on a level surface: calibrate
+//         the accelerometer's x/y bias (saved to flash), fixing "level".
 //   IO0   cycle colour theme.
 #include <Arduino.h>
 #include <Preferences.h>
@@ -62,6 +64,7 @@ static bool  imuOk = false;
 static int   orientation = 2;       // 0..7: 4 rotations (0-3) x mirror (4-7); 2 matches the board
 static int   theme = 0;
 static float fAx = 0.f, fAy = 0.f;  // filtered chip-frame accel (g)
+static float biasX = 0.f, biasY = 0.f; // accel bias (chip frame, g), subtracted
 
 static const render::Theme THEMES[] = {
   // bg            deep            body            rim
@@ -103,11 +106,18 @@ struct Button {
   static constexpr uint32_t HOLD_MS = 50;
   bool pressed() {
     uint32_t t = millis();
-    if (buttonRead(pin) == HIGH) { lowSince = 0; armed = true; return false; }
+    if (buttonRead(pin) == HIGH) { lowSince = 0; armed = true; longFired = false; return false; }
     if (lowSince == 0) { lowSince = t; return false; }
     if (armed && t - lowSince >= HOLD_MS) { armed = false; return true; }
     return false;
   }
+  // True once when the button has been held for `ms` (after pressed() fired).
+  bool heldFor(uint32_t ms) {
+    if (longFired || lowSince == 0 || buttonRead(pin) == HIGH) return false;
+    if (millis() - lowSince >= ms) { longFired = true; return true; }
+    return false;
+  }
+  bool longFired = false;
 };
 static Button btnOrient{BTN_ORIENT}, btnReset{BTN_RESET}, btnTheme{BTN_THEME};
 
@@ -122,6 +132,8 @@ void setup() {
 
   prefs.begin("fluid", false);
   orientation = prefs.getInt("orientation2", 2) & 7;
+  biasX = prefs.getFloat("biasX", 0.f);
+  biasY = prefs.getFloat("biasY", 0.f);
   theme       = prefs.getInt("theme", 0) % THEME_COUNT;
 
   display::begin();
@@ -137,9 +149,9 @@ void setup() {
   delay(50);
   display::setBacklight(true);
 
-  Serial.printf("fluid sim: %d particles, IMU %s (0x%02X), orientation %d (saved %s), theme %d, IO47=%d IO48=%d IO0=%d\n",
+  Serial.printf("fluid sim: %d particles, IMU %s (0x%02X), orientation %d (saved %s), bias (%+.3f,%+.3f) g, theme %d, IO47=%d IO48=%d IO0=%d\n",
                 sim.n, imuOk ? "ok" : "NOT FOUND - demo mode", imu::address(), orientation,
-                prefs.isKey("orientation2") ? "present" : "absent", theme,
+                prefs.isKey("orientation2") ? "present" : "absent", biasX, biasY, theme,
                 buttonRead(BTN_ORIENT), buttonRead(BTN_RESET), buttonRead(BTN_THEME));
 }
 
@@ -156,6 +168,13 @@ void loop() {
     Serial.printf("orientation -> %d (button IO47 held %lu ms)\n", orientation, (unsigned long)(millis() - btnOrient.lowSince));
   }
   if (btnReset.pressed()) sim.reset(PARTICLES);
+  if (btnReset.heldFor(1500)) {
+    // Board is assumed flat on a level surface: x/y should read zero.
+    biasX = fAx + biasX; biasY = fAy + biasY;   // fAx/fAy are already bias-corrected
+    prefs.putFloat("biasX", biasX); prefs.putFloat("biasY", biasY);
+    Serial.printf("calibrated: bias x=%+.3f y=%+.3f g\n", biasX, biasY);
+    sim.reset(PARTICLES);
+  }
   if (btnTheme.pressed()) {
     theme = (theme + 1) % THEME_COUNT;
     prefs.putInt("theme", theme);
@@ -166,8 +185,8 @@ void loop() {
   float gx, gy;
   float ax, ay, az, wx, wy, wz;
   if (imuOk && imu::read(ax, ay, az, wx, wy, wz)) {
-    fAx += (ax - fAx) * ACCEL_ALPHA;
-    fAy += (ay - fAy) * ACCEL_ALPHA;
+    fAx += ((ax - biasX) - fAx) * ACCEL_ALPHA;
+    fAy += ((ay - biasY) - fAy) * ACCEL_ALPHA;
     float sx, sy;
     mapAxes(orientation, fAx, fAy, sx, sy);
     gx = -sx; gy = -sy;                       // effective gravity = -proper acceleration

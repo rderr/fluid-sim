@@ -21,7 +21,7 @@ plugging it in for the first flash; after that plain uploads work.
 | Button | Action |
 |---|---|
 | IO47 | Cycle the accelerometer-to-screen axis mapping. Saved to flash. |
-| IO48 | Respawn the fluid. |
+| IO48 | Short press: respawn the fluid. Hold 1.5 s with the board flat on a level table: calibrate the accelerometer bias ("level"), saved to flash. |
 | IO0 (BOOT) | Cycle colour theme (water, lava, slime, mercury). Saved to flash. |
 
 **Orientation:** the default IMU-to-screen mapping (2) was checked on
