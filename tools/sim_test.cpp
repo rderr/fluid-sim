@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
   sim.p.viscSigma     = envf("SIGMA", sim.p.viscSigma);
   sim.p.gravity       = envf("GRAV", sim.p.gravity);
   float tiltG         = envf("TILT", 0.8f);
+  int substeps        = (int)envf("SUBSTEPS", 2);
+  const float dt = 1.f / (60.f * substeps);
   render::Theme th;
   th.thrRim  = (uint8_t)envf("THR_RIM", th.thrRim);
   th.thrBody = (uint8_t)envf("THR_BODY", th.thrBody);
@@ -58,7 +60,6 @@ int main(int argc, char** argv) {
   rend.setTheme(th);
   printf("particles: %d rho0=%.2f k=%.0f kn=%.0f beta=%.2f\n", sim.n, sim.p.restDensity, sim.p.stiffness, sim.p.nearStiffness, sim.p.viscBeta);
 
-  const float dt = 1.f / 120.f;
   const int frames = 600;               // 10 s at 60 fps
   double simTime = 0, renderTime = 0;
   int bad = 0;
@@ -71,8 +72,7 @@ int main(int argc, char** argv) {
     else if (t > 6 && t < 8) { gx = 3.f * sinf(t * 40.f); gy = 1; }
 
     auto t0 = std::chrono::steady_clock::now();
-    sim.step(dt, gx, gy);
-    sim.step(dt, gx, gy);
+    for (int k = 0; k < substeps; ++k) sim.step(dt, gx, gy);
     auto t1 = std::chrono::steady_clock::now();
     rend.draw(sim);
     auto t2 = std::chrono::steady_clock::now();
@@ -90,14 +90,14 @@ int main(int argc, char** argv) {
       // fluid height estimate: fraction of particles in lower half
       int lower = 0; for (int i = 0; i < sim.n; ++i) if (sim.py[i] > fluid::H / 2) lower++;
       float sumV = 0; for (int i = 0; i < sim.n; ++i) sumV += sqrtf(sim.vx[i]*sim.vx[i] + sim.vy[i]*sim.vy[i]);
-      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%%\n",
-             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n);
+      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% pairs=%d\n",
+             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, sim.pairCount());
       char path[512]; snprintf(path, sizeof path, "%s/frame_%03d.bmp", out, fr);
       writeBmp(path, rend.fb);
     }
   }
   printf("bad samples: %d\n", bad);
-  printf("avg per frame: sim(2 substeps) %.3f ms, render %.3f ms (desktop)\n",
+  printf("avg per frame: sim(%d substeps) %.3f ms, render %.3f ms (desktop)\n", substeps,
          simTime / frames * 1e3, renderTime / frames * 1e3);
   return bad ? 1 : 0;
 }

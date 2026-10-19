@@ -11,7 +11,7 @@ namespace render {
 
 constexpr int W = fluid::W;
 constexpr int H = fluid::H;
-constexpr int KR = 4;                 // splat kernel radius (px)
+constexpr int KR = 3;                 // splat kernel radius (px)
 constexpr int KS = 2 * KR + 1;
 constexpr float KAMP = 60.f;          // splat kernel peak weight
 

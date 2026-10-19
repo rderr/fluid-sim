@@ -36,8 +36,10 @@ silently redirect it, so the buttons use the raw IDF GPIO API.
 ## How it works
 
 - `src/fluid.h` is a Clavet-style particle fluid (double density relaxation
-  with a near-pressure term) on a 16x16 spatial hash. 400 particles,
-  two 1/120 s substeps per frame, running on core 1 at 60 fps.
+  with a near-pressure term) on a 22x22 spatial hash. 540 particles,
+  two 1/120 s substeps per frame, running on core 1 at ~60 fps. Neighbour
+  pairs are found once per substep into a compact list that the viscosity,
+  density and relaxation passes all reuse.
 - `src/render.h` splats particles into an 8-bit density field and maps it
   through a colour LUT, giving a metaball look with a bright surface rim.
   It runs on core 0 from a position snapshot, overlapping the physics.

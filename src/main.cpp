@@ -22,7 +22,7 @@ constexpr int BTN_ORIENT = 47;
 constexpr int BTN_RESET  = 48;
 constexpr int BTN_THEME  = 0;
 
-constexpr int   PARTICLES   = 400;
+constexpr int   PARTICLES   = 540;
 constexpr float SUB_DT      = 1.f / 120.f;   // physics substep
 constexpr int   SUBSTEPS    = 2;             // per rendered frame
 constexpr float ACCEL_ALPHA = 0.2f;          // IMU low-pass (per frame); lower = smoother

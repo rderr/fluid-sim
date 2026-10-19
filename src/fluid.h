@@ -12,12 +12,12 @@ namespace fluid {
 
 constexpr int W = 128;
 constexpr int H = 128;
-constexpr int MAX_P = 512;
+constexpr int MAX_P = 800;
 
-constexpr float RADIUS = 8.0f;     // interaction radius h (px)
-constexpr int   CELL = 8;          // spatial hash cell size, must be >= RADIUS
-constexpr int   GW = W / CELL;
-constexpr int   GH = H / CELL;
+constexpr float RADIUS = 6.0f;     // interaction radius h (px)
+constexpr int   CELL = 6;          // spatial hash cell size, must be >= RADIUS
+constexpr int   GW = (W + CELL - 1) / CELL;
+constexpr int   GH = (H + CELL - 1) / CELL;
 constexpr int   CELLS = GW * GH;
 constexpr float WALL = 1.5f;       // wall margin (px)
 
@@ -32,12 +32,12 @@ static inline float fastInvSqrt(float x) {
 
 struct Params {
   float restDensity   = 1.8f;     // rho0 (sum of (1-q)^2 over neighbours)
-  float stiffness     = 6000.f;   // k
-  float nearStiffness = 12000.f;  // k_near (anti-clustering)
+  float stiffness     = 4500.f;   // k
+  float nearStiffness = 9000.f;   // k_near (anti-clustering)
   float viscSigma     = 3.0f;     // linear viscosity: damps rest jitter and small sloshes
   float viscBeta      = 0.3f;     // quadratic viscosity: tames hard impacts
   float gravity       = 500.f;    // px/s^2 per 1 g (lower = behaves like a bigger tank)
-  float maxSpeed      = 0.9f * CELL * 120.f; // px/s; cap so particles never skip a cell
+  float maxSpeed      = 0.9f * CELL * 60.f;  // px/s; cap so particles never skip a cell per step
 };
 
 class Sim {
@@ -48,7 +48,7 @@ public:
   Params p;
 
   // Spawn `count` particles on a lattice filling the lower `fill` fraction of the box.
-  void reset(int count, float spacing = 4.4f, float fill = 0.5f) {
+  void reset(int count, float spacing = 3.3f, float fill = 0.5f) {
     if (count > MAX_P) count = MAX_P;
     n = 0;
     int cols = (int)((W - 2 * WALL) / spacing);
@@ -75,19 +75,20 @@ public:
     const float ax = gx * p.gravity * dt, ay = gy * p.gravity * dt;
     for (int i = 0; i < n; ++i) { vx[i] += ax; vy[i] += ay; }
 
-    // 2. viscosity impulses (uses last frame's neighbourhood)
-    buildGrid();
+    // 2. viscosity impulses, using the pair list found in the previous step
+    //    (positions have moved by at most a fraction of a pixel since)
     if (p.viscSigma > 0.f || p.viscBeta > 0.f) {
-      forEachPair([&](int i, int j, float rx, float ry, float invR, float q) {
-        float nx = rx * invR, ny = ry * invR;
-        float u = (vx[i] - vx[j]) * nx + (vy[i] - vy[j]) * ny;
-        if (u > 0.f) {
-          float I = dt * (1.f - q) * (p.viscSigma * u + p.viscBeta * u * u) * 0.5f;
+      for (int k = 0; k < nPairs_; ++k) {
+        const Pair& pr = pairs_[k];
+        int i = pr.i, j = pr.j;
+        float u = (vx[i] - vx[j]) * pr.nx + (vy[i] - vy[j]) * pr.ny;
+        if (u > 0.f && pr.q < 1.f) {
+          float I = dt * (1.f - pr.q) * (p.viscSigma * u + p.viscBeta * u * u) * 0.5f;
           if (I > u * 0.5f) I = u * 0.5f;   // never reverse the relative velocity
-          vx[i] -= I * nx; vy[i] -= I * ny;
-          vx[j] += I * nx; vy[j] += I * ny;
+          vx[i] -= I * pr.nx; vy[i] -= I * pr.ny;
+          vx[j] += I * pr.nx; vy[j] += I * pr.ny;
         }
-      });
+      }
     }
 
     // 3. clamp speed, save old positions, advect
@@ -99,27 +100,31 @@ public:
       px[i] += vx[i] * dt; py[i] += vy[i] * dt;
     }
 
-    // 4. double density relaxation (Jacobi form: each pair visited once)
+    // 4. find neighbour pairs once, then double density relaxation
     buildGrid();
+    findPairs();
     for (int i = 0; i < n; ++i) { rho_[i] = 0.f; rhoN_[i] = 0.f; }
-    forEachPair([&](int i, int j, float, float, float, float q) {
-      float a = 1.f - q, a2 = a * a, a3 = a2 * a;
-      rho_[i] += a2; rhoN_[i] += a3;
-      rho_[j] += a2; rhoN_[j] += a3;
-    });
+    for (int k = 0; k < nPairs_; ++k) {
+      const Pair& pr = pairs_[k];
+      float a = 1.f - pr.q, a2 = a * a, a3 = a2 * a;
+      rho_[pr.i] += a2; rhoN_[pr.i] += a3;
+      rho_[pr.j] += a2; rhoN_[pr.j] += a3;
+    }
     for (int i = 0; i < n; ++i) {
       pr_[i]  = p.stiffness * (rho_[i] - p.restDensity);
       prN_[i] = p.nearStiffness * rhoN_[i];
       dx_[i] = dy_[i] = 0.f;
     }
     const float dt2 = dt * dt;
-    forEachPair([&](int i, int j, float rx, float ry, float invR, float q) {
-      float a = 1.f - q;
+    for (int k = 0; k < nPairs_; ++k) {
+      const Pair& pr = pairs_[k];
+      int i = pr.i, j = pr.j;
+      float a = 1.f - pr.q;
       float D = dt2 * ((pr_[i] + pr_[j]) * a + (prN_[i] + prN_[j]) * a * a) * 0.5f;
-      float nx = rx * invR, ny = ry * invR;   // unit vector from i to j
-      dx_[i] -= D * nx; dy_[i] -= D * ny;
-      dx_[j] += D * nx; dy_[j] += D * ny;
-    });
+      float Dx = D * pr.nx, Dy = D * pr.ny;
+      dx_[i] -= Dx; dy_[i] -= Dy;
+      dx_[j] += Dx; dy_[j] += Dy;
+    }
     const float maxD = 0.5f * h, maxD2 = maxD * maxD;
     for (int i = 0; i < n; ++i) {
       float d2 = dx_[i] * dx_[i] + dy_[i] * dy_[i];
@@ -138,7 +143,13 @@ public:
       vx[i] = (px[i] - ox_[i]) * invDt;
       vy[i] = (py[i] - oy_[i]) * invDt;
     }
+
+    // 7. refresh pair geometry from the final positions so the next step's
+    //    viscosity pass sees current directions and distances
+    refreshPairs();
   }
+
+  int pairCount() const { return nPairs_; }
 
   // Average neighbour density (diagnostic).
   float meanDensity() const {
@@ -150,9 +161,37 @@ private:
   float ox_[MAX_P], oy_[MAX_P];
   float rho_[MAX_P], rhoN_[MAX_P], pr_[MAX_P], prN_[MAX_P];
   float dx_[MAX_P], dy_[MAX_P];
+
+  // Neighbour pair cache: unit vector from i to j and q = r/h.
+  struct Pair { uint16_t i, j; float nx, ny, q; };
+  static constexpr int MAX_PAIRS = 5120;
+  Pair pairs_[MAX_PAIRS];
+  int  nPairs_ = 0;
+
+  void refreshPairs() {
+    const float invH = 1.0f / RADIUS;
+    for (int k = 0; k < nPairs_; ++k) {
+      Pair& pr = pairs_[k];
+      float rx = px[pr.j] - px[pr.i], ry = py[pr.j] - py[pr.i];
+      float r2 = rx * rx + ry * ry;
+      if (r2 < 1e-6f) { pr.q = 1.f; continue; }      // coincident: skip in viscosity
+      float invR = fastInvSqrt(r2);
+      pr.nx = rx * invR; pr.ny = ry * invR; pr.q = r2 * invR * invH;
+    }
+  }
+
+  void findPairs() {
+    nPairs_ = 0;
+    forEachPair([&](int i, int j, float rx, float ry, float invR, float q) {
+      if (nPairs_ >= MAX_PAIRS) return;      // degrade gracefully when over-packed
+      Pair& pr = pairs_[nPairs_++];
+      pr.i = (uint16_t)i; pr.j = (uint16_t)j;
+      pr.nx = rx * invR; pr.ny = ry * invR; pr.q = q;
+    });
+  }
   uint16_t cellStart_[CELLS + 1];
   uint16_t sorted_[MAX_P];
-  uint8_t  cellOf_[MAX_P];
+  uint16_t cellOf_[MAX_P];
 
   static inline int cellCoord(float v, int max) {
     int c = (int)(v * (1.0f / CELL));
@@ -164,7 +203,7 @@ private:
     memset(count, 0, sizeof(count));
     for (int i = 0; i < n; ++i) {
       int c = cellCoord(py[i], GH) * GW + cellCoord(px[i], GW);
-      cellOf_[i] = (uint8_t)c;
+      cellOf_[i] = (uint16_t)c;
       count[c]++;
     }
     uint16_t acc = 0;
