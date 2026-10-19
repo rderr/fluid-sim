@@ -50,8 +50,11 @@ int main(int argc, char** argv) {
   sim.p.viscBeta      = envf("BETA", sim.p.viscBeta);
   sim.p.viscSigma     = envf("SIGMA", sim.p.viscSigma);
   sim.p.gravity       = envf("GRAV", sim.p.gravity);
+  sim.p.wallDensity   = envf("WALLD", sim.p.wallDensity);
   float tiltG         = envf("TILT", 0.8f);
   int substeps        = (int)envf("SUBSTEPS", 2);
+  bool hold           = envf("HOLD", 0) > 0;   // HOLD=1: constant gentle tilt the whole run
+  bool slosh          = envf("SLOSH", 0) > 0;  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
   const float dt = 1.f / (60.f * substeps);
   render::Theme th;
   th.thrRim  = (uint8_t)envf("THR_RIM", th.thrRim);
@@ -67,9 +70,11 @@ int main(int argc, char** argv) {
     // scripted tilt: rest, tilt right, tilt up (upside down), shake, rest
     float gx = 0, gy = 1;
     float t = fr / 60.f;
-    if (t > 2 && t < 4)      { gx = tiltG; gy = sqrtf(1.f - tiltG * tiltG); }
-    else if (t > 4 && t < 6) { gx = 0; gy = -1; }
-    else if (t > 6 && t < 8) { gx = 3.f * sinf(t * 40.f); gy = 1; }
+    if (slosh)               { gx = (t > 2 && t < 3) ? -0.7f : 0.1f; gy = sqrtf(1.f - gx * gx); }
+    else if (hold)           { gx = tiltG; gy = sqrtf(1.f - tiltG * tiltG); }
+    else if (t > 2 && t < 4) { gx = tiltG; gy = sqrtf(1.f - tiltG * tiltG); }
+    else if (!hold && !slosh && t > 4 && t < 6) { gx = 0; gy = -1; }
+    else if (!hold && !slosh && t > 6 && t < 8) { gx = 3.f * sinf(t * 40.f); gy = 1; }
 
     auto t0 = std::chrono::steady_clock::now();
     for (int k = 0; k < substeps; ++k) sim.step(dt, gx, gy);
@@ -88,10 +93,11 @@ int main(int argc, char** argv) {
     }
     if (fr % 30 == 0 || fr == frames - 1) {
       // fluid height estimate: fraction of particles in lower half
-      int lower = 0; for (int i = 0; i < sim.n; ++i) if (sim.py[i] > fluid::H / 2) lower++;
+      int lower = 0, leftWall = 0;
+      for (int i = 0; i < sim.n; ++i) { if (sim.py[i] > fluid::H / 2) lower++; if (sim.px[i] < fluid::WALL + 0.5f) leftWall++; }
       float sumV = 0; for (int i = 0; i < sim.n; ++i) sumV += sqrtf(sim.vx[i]*sim.vx[i] + sim.vy[i]*sim.vy[i]);
-      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% pairs=%d\n",
-             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, sim.pairCount());
+      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% leftWall=%3d pairs=%d\n",
+             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, leftWall, sim.pairCount());
       char path[512]; snprintf(path, sizeof path, "%s/frame_%03d.bmp", out, fr);
       writeBmp(path, rend.fb);
     }

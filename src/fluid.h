@@ -39,27 +39,27 @@ struct Params {
   //         droplets; too high and it clumps into lumps and looks lumpy.
   //   down: falls apart easily into spray, wets walls less, flatter surface;
   //         too low and it never gathers back into one body.
-  float restDensity   = 2.0f;
+  float restDensity   = 1.25f;
 
   // Pressure stiffness. How hard the liquid resists being compressed.
   //   up:   firmer, more incompressible, bounces off walls, slosh waves
   //         travel faster; too high and the surface shimmers or boils.
   //   down: squishier, packs down against walls when tilted, waves are
   //         slower and softer; too low and the volume visibly shrinks.
-  float stiffness     = 3500.f;
+  float stiffness     = 1000.f;
 
   // Near-pressure (anti-clustering). Keeps particles from stacking on top
   // of each other; usually kept at ~2x stiffness.
   //   up:   more even spacing, smoother interior, slightly more jitter.
   //   down: particles bunch into dense knots and holes open in the body.
-  float nearStiffness = 7000.f;
+  float nearStiffness = 2000.f;
 
   // Linear viscosity. Thickness: water vs honey.
   //   up:   thicker, settles faster, surface calms quickly, small tilts
   //         produce slow smooth flow; too high and it crawls like syrup.
   //   down: more watery, livelier, surface ripples longer; too low and it
   //         jitters at rest and over-reacts to tiny movements.
-  float viscSigma     = 3.0f;
+  float viscSigma     = 2.0f;
 
   // Quadratic viscosity. Only acts on fast collisions, so it damps splashes
   // without thickening gentle flow.
@@ -72,7 +72,15 @@ struct Params {
   //         at once and small tilts already pour it to one side.
   //   down: lighter and slower, behaves like a large tank: lazy sloshing,
   //         gentle tilts only tip the surface.
-  float gravity       = 500.f;
+  float gravity       = 1000.f;
+
+  // Wall ghost density. The wall counts as a layer of neighbours so particles
+  // touching it feel normal pressure instead of the negative (cohesive)
+  // pressure that makes a film cling to the wall.
+  //   up:   walls shed liquid cleanly, no stuck lines; too high and the
+  //         liquid hovers a pixel or two off the walls.
+  //   down: liquid wets and clings to the walls (0 = old behaviour).
+  float wallDensity   = 1.0f;
 
   // Speed cap, px/s. Safety limit so no particle skips a grid cell in one
   // step; it should rarely be reached. Lower only if shakes look wrong.
@@ -149,12 +157,44 @@ public:
       rho_[pr.i] += a2; rhoN_[pr.i] += a3;
       rho_[pr.j] += a2; rhoN_[pr.j] += a3;
     }
+    const float invH = 1.0f / h;
+    if (p.wallDensity > 0.f) {
+      for (int i = 0; i < n; ++i) {
+        // nearest distance to each wall, as q = d/h
+        float qs[4] = { (px[i] - WALL) * invH, (W - WALL - px[i]) * invH,
+                        (py[i] - WALL) * invH, (H - WALL - py[i]) * invH };
+        for (int w = 0; w < 4; ++w) {
+          if (qs[w] < 1.f) {
+            float a = 1.f - (qs[w] < 0.f ? 0.f : qs[w]);
+            rho_[i]  += a * a * p.wallDensity;
+            rhoN_[i] += a * a * a * p.wallDensity;
+          }
+        }
+      }
+    }
     for (int i = 0; i < n; ++i) {
       pr_[i]  = p.stiffness * (rho_[i] - p.restDensity);
       prN_[i] = p.nearStiffness * rhoN_[i];
       dx_[i] = dy_[i] = 0.f;
     }
     const float dt2 = dt * dt;
+    if (p.wallDensity > 0.f) {
+      // the wall pushes back like an immovable neighbour
+      for (int i = 0; i < n; ++i) {
+        float qs[4] = { (px[i] - WALL) * invH, (W - WALL - px[i]) * invH,
+                        (py[i] - WALL) * invH, (H - WALL - py[i]) * invH };
+        static const float sx[4] = { 1.f, -1.f, 0.f, 0.f };
+        static const float sy[4] = { 0.f, 0.f, 1.f, -1.f };
+        for (int w = 0; w < 4; ++w) {
+          if (qs[w] < 1.f) {
+            float a = 1.f - (qs[w] < 0.f ? 0.f : qs[w]);
+            float D = dt2 * (pr_[i] * a + prN_[i] * a * a) * p.wallDensity * 0.5f;
+            if (D < 0.f) D = 0.f;              // walls only push, never pull
+            dx_[i] += D * sx[w]; dy_[i] += D * sy[w];
+          }
+        }
+      }
+    }
     for (int k = 0; k < nPairs_; ++k) {
       const Pair& pr = pairs_[k];
       int i = pr.i, j = pr.j;
@@ -203,7 +243,7 @@ private:
 
   // Neighbour pair cache: unit vector from i to j and q = r/h.
   struct Pair { uint16_t i, j; float nx, ny, q; };
-  static constexpr int MAX_PAIRS = 5120;
+  static constexpr int MAX_PAIRS = 6144;
   Pair pairs_[MAX_PAIRS];
   int  nPairs_ = 0;
 
