@@ -22,7 +22,7 @@ plugging it in for the first flash; after that plain uploads work.
 |---|---|
 | IO47 | Cycle the accelerometer-to-screen axis mapping. Saved to flash. |
 | IO48 | Short press: respawn the fluid. Hold 1.5 s with the board flat on a level table: calibrate the accelerometer bias ("level"), saved to flash. |
-| IO0 (BOOT) | Cycle mode: water, lava, slime, mercury themes, then heat convection. Saved to flash. Typing `m` on the serial port does the same. |
+| IO0 (BOOT) | Cycle mode: water, lava, slime, mercury themes, then heat convection. Saved to flash. Typing `m` on the serial port does the same; `p` toggles per-phase timing output. |
 
 ## Heat convection mode
 
@@ -48,10 +48,13 @@ silently redirect it, so the buttons use the raw IDF GPIO API.
 ## How it works
 
 - `src/fluid.h` is a Clavet-style particle fluid (double density relaxation
-  with a near-pressure term) on a 22x22 spatial hash. 540 particles,
-  two 1/120 s substeps per frame, running on core 1 at ~60 fps. Neighbour
-  pairs are found once per substep into a compact list that the viscosity,
-  density and relaxation passes all reuse.
+  with a near-pressure term) on a 22x22 spatial hash. 640 particles, two
+  substeps per frame sized from the measured frame time so the fluid keeps
+  real-time speed. Neighbour pairs are found once per substep into a compact
+  list that the viscosity, density and relaxation passes all reuse. Pair
+  discovery, density, displacement and geometry refresh are split between
+  both cores (a helper task on core 0 takes half the grid rows / pairs), and
+  heat diffusion runs on core 0 alongside the viscosity pass.
 - `src/render.h` splats particles into an 8-bit density field and maps it
   through a colour LUT, giving a metaball look with a bright surface rim.
   It runs on core 0 from a position snapshot, overlapping the physics.

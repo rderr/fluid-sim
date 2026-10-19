@@ -13,6 +13,7 @@
 //         the accelerometer's x/y bias (saved to flash), fixing "level".
 //   IO0   cycle mode: water, lava, slime, mercury themes, then heat
 //         convection (heater on whichever wall gravity points at).
+// Serial: 'm' = same as IO0, 'p' = toggle per-phase profiling output.
 #include <Arduino.h>
 #include <Preferences.h>
 #include <driver/gpio.h>
@@ -25,9 +26,10 @@ constexpr int BTN_ORIENT = 47;
 constexpr int BTN_RESET  = 48;
 constexpr int BTN_THEME  = 0;
 
-constexpr int   PARTICLES   = 540;
-constexpr float SUB_DT      = 1.f / 120.f;   // physics substep
-constexpr int   SUBSTEPS    = 2;             // per rendered frame
+constexpr int   PARTICLES   = 640;
+constexpr int   SUBSTEPS    = 2;             // physics substeps per rendered frame
+constexpr float FRAME_MIN   = 1.f / 70.f;    // measured frame time is clamped to this range
+constexpr float FRAME_MAX   = 1.f / 40.f;    // so the fluid keeps real-time speed at any fps
 constexpr float ACCEL_ALPHA = 0.2f;          // IMU low-pass (per frame); lower = smoother
 constexpr float ACCEL_MAX   = 2.5f;          // clamp shakes to +/-2.5 g
 
@@ -54,6 +56,23 @@ static void renderTask(void*) {
   }
 }
 
+// Second-core helper for the solver's split passes (see fluid::Sim::Helper).
+static SemaphoreHandle_t jobGo, jobDone;
+static volatile int jobId = 0;
+static uint32_t helperUs[5] = {0, 0, 0, 0, 0};   // time spent per job type on core 0
+static void helperTask(void*) {
+  Serial.printf("helper task on core %d\n", xPortGetCoreID());
+  for (;;) {
+    xSemaphoreTake(jobGo, portMAX_DELAY);
+    uint32_t t = micros();
+    sim.runJob(jobId);
+    helperUs[jobId] += micros() - t;
+    xSemaphoreGive(jobDone);
+  }
+}
+static void helperStart(void*, int job) { jobId = job; xSemaphoreGive(jobGo); }
+static void helperWait(void*)           { xSemaphoreTake(jobDone, portMAX_DELAY); }
+
 static void submitFrame() {
   xSemaphoreTake(renderDone, portMAX_DELAY); // previous frame fully drawn and queued
   memcpy(snapX, sim.px, sim.n * sizeof(float));
@@ -65,6 +84,7 @@ static void submitFrame() {
 }
 
 static bool  imuOk = false;
+static bool  profiling = false;     // 'p' on serial toggles per-phase timing output
 static int   orientation = 2;       // 0..7: 4 rotations (0-3) x mirror (4-7); 2 matches the board
 static int   theme = 0;
 static float fAx = 0.f, fAy = 0.f;  // filtered chip-frame accel (g)
@@ -157,10 +177,16 @@ void setup() {
   renderDone = xSemaphoreCreateBinary();
   xSemaphoreGive(renderDone);
   xTaskCreatePinnedToCore(renderTask, "render", 4096, nullptr, 2, nullptr, 0);
+  jobGo   = xSemaphoreCreateBinary();
+  jobDone = xSemaphoreCreateBinary();
+  xTaskCreatePinnedToCore(helperTask, "simhelper", 4096, nullptr, 3, nullptr, 0);
+  sim.helper = { helperStart, helperWait, nullptr };
+  sim.clock = []() -> uint32_t { return (uint32_t)micros(); };
   submitFrame();
   delay(50);
   display::setBacklight(true);
 
+  Serial.printf("loop on core %d\n", xPortGetCoreID());
   Serial.printf("fluid sim: %d particles, IMU %s (0x%02X), orientation %d (saved %s), bias (%+.3f,%+.3f) g, theme %d, IO47=%d IO48=%d IO0=%d\n",
                 sim.n, imuOk ? "ok" : "NOT FOUND - demo mode", imu::address(), orientation,
                 prefs.isKey("orientation2") ? "present" : "absent", biasX, biasY, theme,
@@ -169,6 +195,7 @@ void setup() {
 
 void loop() {
   static uint32_t lastFrame = micros();
+  static float lastFrameDt = 1.f / 60.f;
   static uint32_t statT = millis();
   static int frames = 0;
   static uint32_t simUs = 0;
@@ -189,7 +216,11 @@ void loop() {
   }
   // 'm' on the serial port does the same as the mode button (handy for testing)
   bool serialMode = false;
-  while (Serial.available()) if (Serial.read() == 'm') serialMode = true;
+  while (Serial.available()) {
+    int c = Serial.read();
+    if (c == 'm') serialMode = true;
+    if (c == 'p') profiling = !profiling;
+  }
   if (btnTheme.pressed() || serialMode) {
     theme = (theme + 1) % MODE_COUNT;
     prefs.putInt("theme", theme);
@@ -215,7 +246,9 @@ void loop() {
 
   // --- simulate + draw ---------------------------------------------------
   uint32_t t0 = micros();
-  for (int s = 0; s < SUBSTEPS; ++s) sim.step(SUB_DT, gx, gy);
+  float frameDt = lastFrameDt;
+  if (frameDt < FRAME_MIN) frameDt = FRAME_MIN; else if (frameDt > FRAME_MAX) frameDt = FRAME_MAX;
+  for (int s = 0; s < SUBSTEPS; ++s) sim.step(frameDt / SUBSTEPS, gx, gy);
   simUs += micros() - t0;
   submitFrame();                            // hands the frame to core 0
 
@@ -226,11 +259,26 @@ void loop() {
     Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
                   frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames,
                   orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f);
+    if (profiling) {
+    Serial.printf("   per frame: grid %.1f pairs %.1f dens %.1f disp %.1f visc %.1f heat %.1f rest %.1f ms, pairs %d\n",
+                  sim.prof[0] / 1000.f / frames, sim.prof[1] / 1000.f / frames, sim.prof[2] / 1000.f / frames,
+                  sim.prof[3] / 1000.f / frames, sim.prof[4] / 1000.f / frames, sim.prof[5] / 1000.f / frames,
+                  sim.prof[6] / 1000.f / frames, sim.pairCount());
+    Serial.printf("   discover own %.1f wait %.1f helper %.1f | displace own %.1f wait %.1f helper %.1f | helper dens %.1f refresh %.1f diffuse %.1f ms, rowMid %d\n",
+                  sim.profOwn[0] / 1000.f / frames, sim.profWait[0] / 1000.f / frames, helperUs[2] / 1000.f / frames,
+                  sim.profOwn[1] / 1000.f / frames, sim.profWait[1] / 1000.f / frames, helperUs[1] / 1000.f / frames,
+                  helperUs[0] / 1000.f / frames, helperUs[3] / 1000.f / frames, helperUs[4] / 1000.f / frames, sim.rowMid_);
+    }
+    for (int i = 0; i < 5; ++i) helperUs[i] = 0;
+    for (int i = 0; i < 7; ++i) sim.prof[i] = 0;
+    sim.profOwn[0] = sim.profOwn[1] = sim.profWait[0] = sim.profWait[1] = 0;
     statT = now; frames = 0; simUs = 0; drawUsAcc = 0;
   }
 
   // Pace to ~60 fps so the physics timestep stays honest.
   uint32_t frameUs = micros() - lastFrame;
   if (frameUs < 16667) delayMicroseconds(16667 - frameUs);
-  lastFrame = micros();
+  uint32_t nowUs = micros();
+  lastFrameDt = (nowUs - lastFrame) * 1e-6f;
+  lastFrame = nowUs;
 }

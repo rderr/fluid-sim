@@ -12,7 +12,7 @@ namespace fluid {
 
 constexpr int W = 128;
 constexpr int H = 128;
-constexpr int MAX_P = 800;
+constexpr int MAX_P = 704;
 
 constexpr float RADIUS = 6.0f;     // interaction radius h (px)
 constexpr int   CELL = 6;          // spatial hash cell size, must be >= RADIUS
@@ -46,13 +46,13 @@ struct Params {
   //         travel faster; too high and the surface shimmers or boils.
   //   down: squishier, packs down against walls when tilted, waves are
   //         slower and softer; too low and the volume visibly shrinks.
-  float stiffness     = 1000.f;
+  float stiffness     = 2500.f;
 
   // Near-pressure (anti-clustering). Keeps particles from stacking on top
   // of each other; usually kept at ~2x stiffness.
   //   up:   more even spacing, smoother interior, slightly more jitter.
   //   down: particles bunch into dense knots and holes open in the body.
-  float nearStiffness = 2000.f;
+  float nearStiffness = 5000.f;
 
   // Linear viscosity. Thickness: water vs honey.
   //   up:   thicker, settles faster, surface calms quickly, small tilts
@@ -125,10 +125,33 @@ public:
   bool  heat = false;      // enable convection
   Params p;
 
+  // Optional second-core helper. When set, the density and displacement
+  // passes are split: this core does pairs [0, mid), the helper runs
+  // runJob(job) for [mid, nPairs). start() must return immediately and
+  // wait() must block until the job has finished.
+  // Optional profiling clock (microseconds). When set, per-phase times
+  // accumulate in prof[] (grid, pairs, density, displace, viscosity, heat, rest).
+  uint32_t (*clock)() = nullptr;
+  uint32_t prof[7] = {0, 0, 0, 0, 0, 0, 0};
+  uint32_t profOwn[2] = {0, 0}, profWait[2] = {0, 0};   // discovery, displacement: own work / wait for helper
+
+  struct Helper { void (*start)(void*, int job); void (*wait)(void*); void* ctx; };
+  Helper helper { nullptr, nullptr, nullptr };
+  enum { JOB_DENSITY = 0, JOB_DISPLACE = 1, JOB_DISCOVER = 2, JOB_REFRESH = 3, JOB_DIFFUSE = 4 };
+  void runJob(int job) {
+    switch (job) {
+      case JOB_DENSITY:  densityRange(b0_, MAX_PAIRS, rhoB_, rhoNB_); break;
+      case JOB_DISPLACE: displaceRange(b0_, MAX_PAIRS, dxB_, dyB_); break;
+      case JOB_DISCOVER: discoverRows(rowMid_, GH, true); break;
+      case JOB_REFRESH:  refreshRange(b0_, MAX_PAIRS); break;
+      case JOB_DIFFUSE:  diffuse(); break;
+    }
+  }
+
   // Spawn `count` particles on a lattice filling the lower `fill` fraction of the box.
   void reset(int count, float spacing = 3.3f, float fill = 0.5f) {
     if (count > MAX_P) count = MAX_P;
-    n = 0;
+    n = 0; nPairs_ = 0; b0_ = MAX_PAIRS;
     int cols = (int)((W - 2 * WALL) / spacing);
     float x0 = (W - cols * spacing) * 0.5f + spacing * 0.5f;
     float y = H - WALL - spacing * 0.5f;
@@ -149,6 +172,8 @@ public:
   // (screen coordinates: +x right, +y down).
   void step(float dt, float gx, float gy) {
     const float h = RADIUS;
+    uint32_t t0 = clock ? clock() : 0, t1;
+    auto lap = [&](int slot) { if (clock) { t1 = clock(); prof[slot] += t1 - t0; t0 = t1; } };
 
     // 1. gravity (scaled per particle by buoyancy when heat is on)
     const float ax = gx * p.gravity * dt, ay = gy * p.gravity * dt;
@@ -164,21 +189,21 @@ public:
     }
 
     // 2. viscosity impulses, using the pair list found in the previous step
-    //    (positions have moved by at most a fraction of a pixel since)
+    //    (positions have moved by at most a fraction of a pixel since).
+    //    Heat diffusion uses the same list and runs on the helper meanwhile.
+    bool diffusing = false;
+    if (heat && nPairs_ > 0) {
+      diffK_ = p.diffusion * dt; if (diffK_ > 0.04f) diffK_ = 0.04f;
+      if (helper.start) { helper.start(helper.ctx, JOB_DIFFUSE); diffusing = true; }
+      else diffuse();
+    }
     if (p.viscSigma > 0.f || p.viscBeta > 0.f) {
-      for (int k = 0; k < nPairs_; ++k) {
-        const Pair& pr = pairs_[k];
-        int i = pr.i, j = pr.j;
-        float u = (vx[i] - vx[j]) * pr.nx + (vy[i] - vy[j]) * pr.ny;
-        if (u > 0.f && pr.q < 1.f) {
-          float I = dt * (1.f - pr.q) * (p.viscSigma * u + p.viscBeta * u * u) * 0.5f;
-          if (I > u * 0.5f) I = u * 0.5f;   // never reverse the relative velocity
-          vx[i] -= I * pr.nx; vy[i] -= I * pr.ny;
-          vx[j] += I * pr.nx; vy[j] += I * pr.ny;
-        }
-      }
+      viscosityRange(0, nPairs_, dt);
+      viscosityRange(b0_, MAX_PAIRS, dt);
     }
 
+    if (diffusing) helper.wait(helper.ctx);
+    lap(4);   // gravity + viscosity (+ diffusion on the helper)
     // 3. clamp speed, save old positions, advect
     const float vmax2 = p.maxSpeed * p.maxSpeed;
     for (int i = 0; i < n; ++i) {
@@ -189,17 +214,25 @@ public:
     }
 
     // 4. find neighbour pairs once, then double density relaxation
+    lap(6);
     buildGrid();
+    lap(0);
     findPairs();
+    lap(1);
     for (int i = 0; i < n; ++i) { rho_[i] = 0.f; rhoN_[i] = 0.f; }
-    for (int k = 0; k < nPairs_; ++k) {
-      const Pair& pr = pairs_[k];
-      float a = 1.f - pr.q, a2 = a * a, a3 = a2 * a;
-      rho_[pr.i] += a2; rhoN_[pr.i] += a3;
-      rho_[pr.j] += a2; rhoN_[pr.j] += a3;
+    if (helper.start) {
+      for (int i = 0; i < n; ++i) { rhoB_[i] = 0.f; rhoNB_[i] = 0.f; }
+      helper.start(helper.ctx, JOB_DENSITY);
+      densityRange(0, nPairs_, rho_, rhoN_);
+      helper.wait(helper.ctx);
+      for (int i = 0; i < n; ++i) { rho_[i] += rhoB_[i]; rhoN_[i] += rhoNB_[i]; }
+    } else {
+      densityRange(0, nPairs_, rho_, rhoN_);
     }
+    lap(2);
     const float invH = 1.0f / h;
     if (heat) heatStep(dt, gx, gy, invH);
+    lap(5);
     if (p.wallDensity > 0.f) {
       for (int i = 0; i < n; ++i) {
         // nearest distance to each wall, as q = d/h
@@ -237,15 +270,20 @@ public:
         }
       }
     }
-    for (int k = 0; k < nPairs_; ++k) {
-      const Pair& pr = pairs_[k];
-      int i = pr.i, j = pr.j;
-      float a = 1.f - pr.q;
-      float D = dt2 * ((pr_[i] + pr_[j]) * a + (prN_[i] + prN_[j]) * a * a) * 0.5f;
-      float Dx = D * pr.nx, Dy = D * pr.ny;
-      dx_[i] -= Dx; dy_[i] -= Dy;
-      dx_[j] += Dx; dy_[j] += Dy;
+    dt2_ = dt2;
+    if (helper.start) {
+      for (int i = 0; i < n; ++i) { dxB_[i] = 0.f; dyB_[i] = 0.f; }
+      uint32_t a = clock ? clock() : 0;
+      helper.start(helper.ctx, JOB_DISPLACE);
+      displaceRange(0, nPairs_, dx_, dy_);
+      uint32_t b = clock ? clock() : 0;
+      helper.wait(helper.ctx);
+      if (clock) { profOwn[1] += b - a; profWait[1] += clock() - b; }
+      for (int i = 0; i < n; ++i) { dx_[i] += dxB_[i]; dy_[i] += dyB_[i]; }
+    } else {
+      displaceRange(0, nPairs_, dx_, dy_);
     }
+    lap(3);
     const float maxD = 0.5f * h, maxD2 = maxD * maxD;
     for (int i = 0; i < n; ++i) {
       float d2 = dx_[i] * dx_[i] + dy_[i] * dy_[i];
@@ -268,9 +306,10 @@ public:
     // 7. refresh pair geometry from the final positions so the next step's
     //    viscosity pass sees current directions and distances
     refreshPairs();
+    lap(6);
   }
 
-  int pairCount() const { return nPairs_; }
+  int pairCount() const { return nPairs_ + (MAX_PAIRS - b0_); }
   float meanTemp() const { float t = 0; for (int i = 0; i < n; ++i) t += temp[i]; return n ? t / n : 0.f; }
 
 private:
@@ -303,12 +342,20 @@ private:
       T += bulk * (p.ambient - T);
       temp[i] = T;
     }
-    // diffusion (explicit; k*dt*neighbours must stay well below 1)
-    float k = p.diffusion * dt;
-    if (k > 0.04f) k = 0.04f;
-    for (int c = 0; c < nPairs_; ++c) {
+  }
+
+  // Explicit diffusion over the pair list (k*dt*neighbours stays well below 1).
+  // Touches only temp[], so it can run on the helper while this core runs
+  // the viscosity pass (which touches only velocities).
+  float diffK_ = 0.f;
+  void diffuse() {
+    const float k = diffK_;
+    for (int c = 0; c < MAX_PAIRS; ++c) {
+      if (c == nPairs_) { c = b0_; if (c >= MAX_PAIRS) break; }
       const Pair& pr = pairs_[c];
-      float f = k * (1.f - pr.q) * (temp[pr.j] - temp[pr.i]);
+      float w = 1.f - pr.q;
+      if (w <= 0.f) continue;
+      float f = k * w * (temp[pr.j] - temp[pr.i]);
       temp[pr.i] += f; temp[pr.j] -= f;
     }
   }
@@ -325,16 +372,67 @@ private:
   float ox_[MAX_P], oy_[MAX_P];
   float rho_[MAX_P], rhoN_[MAX_P], pr_[MAX_P], prN_[MAX_P];
   float dx_[MAX_P], dy_[MAX_P];
+  float rhoB_[MAX_P], rhoNB_[MAX_P], dxB_[MAX_P], dyB_[MAX_P];   // helper's partial sums
+  float dt2_ = 0.f;
+
+
+  void viscosityRange(int a, int b, float dt) {
+    const float sig = p.viscSigma, beta = p.viscBeta;
+    for (int k = a; k < b; ++k) {
+      const Pair& pr = pairs_[k];
+      int i = pr.i, j = pr.j;
+      float u = (vx[i] - vx[j]) * pr.nx + (vy[i] - vy[j]) * pr.ny;
+      if (u > 0.f && pr.q < 1.f) {
+        float I = dt * (1.f - pr.q) * (sig * u + beta * u * u) * 0.5f;
+        if (I > u * 0.5f) I = u * 0.5f;   // never reverse the relative velocity
+        vx[i] -= I * pr.nx; vy[i] -= I * pr.ny;
+        vx[j] += I * pr.nx; vy[j] += I * pr.ny;
+      }
+    }
+  }
+
+  void densityRange(int a, int b, float* rho, float* rhoN) const {
+    for (int k = a; k < b; ++k) {
+      const Pair& pr = pairs_[k];
+      float w = 1.f - pr.q;
+      if (w <= 0.f) continue;                 // in the skin, not in range
+      float w2 = w * w, w3 = w2 * w;
+      rho[pr.i] += w2; rhoN[pr.i] += w3;
+      rho[pr.j] += w2; rhoN[pr.j] += w3;
+    }
+  }
+  void displaceRange(int a, int b, float* dx, float* dy) const {
+    const float dt2 = dt2_;
+    for (int k = a; k < b; ++k) {
+      const Pair& pr = pairs_[k];
+      int i = pr.i, j = pr.j;
+      float w = 1.f - pr.q;
+      if (w <= 0.f) continue;
+      float D = dt2 * ((pr_[i] + pr_[j]) * w + (prN_[i] + prN_[j]) * w * w) * 0.5f;
+      float Dx = D * pr.nx, Dy = D * pr.ny;
+      dx[i] -= Dx; dy[i] -= Dy;
+      dx[j] += Dx; dy[j] += Dy;
+    }
+  }
 
   // Neighbour pair cache: unit vector from i to j and q = r/h.
   struct Pair { uint16_t i, j; float nx, ny, q; };
-  static constexpr int MAX_PAIRS = 6144;
+  static constexpr int MAX_PAIRS = 6400;
   Pair pairs_[MAX_PAIRS];
   int  nPairs_ = 0;
 
   void refreshPairs() {
+    if (helper.start) {
+      helper.start(helper.ctx, JOB_REFRESH);
+      refreshRange(0, nPairs_);
+      helper.wait(helper.ctx);
+    } else {
+      refreshRange(0, nPairs_);
+    }
+  }
+  void refreshRange(int a, int b) {
     const float invH = 1.0f / RADIUS;
-    for (int k = 0; k < nPairs_; ++k) {
+    for (int k = a; k < b; ++k) {
       Pair& pr = pairs_[k];
       float rx = px[pr.j] - px[pr.i], ry = py[pr.j] - py[pr.i];
       float r2 = rx * rx + ry * ry;
@@ -344,17 +442,58 @@ private:
     }
   }
 
-  void findPairs() {
-    nPairs_ = 0;
-    forEachPair([&](int i, int j, float rx, float ry, float invR, float q) {
-      if (nPairs_ >= MAX_PAIRS) return;      // degrade gracefully when over-packed
-      Pair& pr = pairs_[nPairs_++];
+public:
+  int rowMid_ = 0;                 // first grid row handled by the helper
+private:
+  // The pair list is two ranges so both cores can fill it concurrently:
+  // range A = [0, nPairs_) written by this core, range B = [b0_, MAX_PAIRS)
+  // written backwards by the helper. b0_ == MAX_PAIRS when B is empty.
+  int b0_ = MAX_PAIRS;
+
+  // Discover pairs in grid rows [r0, r1). The helper writes backwards from
+  // the end of pairs_ so both halves can fill the same array concurrently.
+  void discoverRows(int r0, int r1, bool back) {
+    const int cap = helper.start ? MAX_PAIRS / 2 : MAX_PAIRS;
+    int cnt = 0;
+    forEachPairRows(r0, r1, [&](int i, int j, float rx, float ry, float invR, float q) {
+      if (cnt >= cap) return;              // degrade gracefully when over-packed
+      Pair& pr = back ? pairs_[MAX_PAIRS - 1 - cnt] : pairs_[cnt];
+      cnt++;
       pr.i = (uint16_t)i; pr.j = (uint16_t)j;
       pr.nx = rx * invR; pr.ny = ry * invR; pr.q = q;
     });
+    if (back) b0_ = MAX_PAIRS - cnt; else nPairs_ = cnt;
+  }
+
+  void findPairs() {
+    if (!helper.start) { discoverRows(0, GH, false); b0_ = MAX_PAIRS; return; }
+    // split rows where the estimated pair work (count_r * (count_r + count_r+1))
+    // is balanced, since the fluid pools densely at one side of the box
+    uint32_t work[GH], total = 0;
+    for (int r = 0; r < GH; ++r) {
+      uint32_t c  = cellStart_[(r + 1) * GW] - cellStart_[r * GW];
+      uint32_t c1 = (r + 1 < GH) ? cellStart_[(r + 2) * GW] - cellStart_[(r + 1) * GW] : 0;
+      work[r] = c * (c + c1) + 1;
+      total += work[r];
+    }
+    uint32_t acc = 0; rowMid_ = GH / 2;
+    for (int r = 0; r < GH; ++r) {
+      acc += work[r];
+      if (acc * 2 >= total) { rowMid_ = r + 1; break; }
+    }
+    if (rowMid_ >= GH) rowMid_ = GH - 1;
+    if (rowMid_ < 1) rowMid_ = 1;
+    b0_ = MAX_PAIRS;
+    uint32_t a = clock ? clock() : 0;
+    helper.start(helper.ctx, JOB_DISCOVER);
+    discoverRows(0, rowMid_, false);
+    uint32_t b = clock ? clock() : 0;
+    helper.wait(helper.ctx);
+    if (clock) { profOwn[0] += b - a; profWait[0] += clock() - b; }
   }
   uint16_t cellStart_[CELLS + 1];
   uint16_t sorted_[MAX_P];
+  float spx_[MAX_P], spy_[MAX_P];   // positions in cell-sorted order (sequential reads)
   uint16_t cellOf_[MAX_P];
 
   static inline int cellCoord(float v, int max) {
@@ -374,14 +513,18 @@ private:
     for (int c = 0; c < CELLS; ++c) { cellStart_[c] = acc; acc += count[c]; count[c] = cellStart_[c]; }
     cellStart_[CELLS] = acc;
     for (int i = 0; i < n; ++i) sorted_[count[cellOf_[i]]++] = (uint16_t)i;
+    for (int a = 0; a < n; ++a) { int i = sorted_[a]; spx_[a] = px[i]; spy_[a] = py[i]; }
   }
 
   // Visit every unordered pair (i<j) closer than RADIUS exactly once.
   // Callback receives (i, j, rx, ry, 1/r, q = r/h) with r = (rx, ry) from i to j.
   template <typename F>
-  void forEachPair(F&& f) {
+  void forEachPair(F&& f) { forEachPairRows(0, GH, f); }
+
+  template <typename F>
+  void forEachPairRows(int r0, int r1, F&& f) {
     const float h2 = RADIUS * RADIUS, invH = 1.0f / RADIUS;
-    for (int cy = 0; cy < GH; ++cy) {
+    for (int cy = r0; cy < r1; ++cy) {
       for (int cx = 0; cx < GW; ++cx) {
         int c = cy * GW + cx;
         int s0 = cellStart_[c], s1 = cellStart_[c + 1];
@@ -395,15 +538,14 @@ private:
           int nc = ny * GW + nx;
           int t0 = cellStart_[nc], t1 = cellStart_[nc + 1];
           for (int a = s0; a < s1; ++a) {
-            int i = sorted_[a];
+            const float xi = spx_[a], yi = spy_[a];
             int bStart = (k == 0) ? a + 1 : t0;
             for (int b = bStart; b < t1; ++b) {
-              int j = sorted_[b];
-              float rx = px[j] - px[i], ry = py[j] - py[i];
+              float rx = spx_[b] - xi, ry = spy_[b] - yi;
               float r2 = rx * rx + ry * ry;
               if (r2 >= h2 || r2 < 1e-6f) continue;
               float invR = fastInvSqrt(r2);
-              f(i, j, rx, ry, invR, r2 * invR * invH);
+              f(sorted_[a], sorted_[b], rx, ry, invR, r2 * invR * invH);
             }
           }
         }
