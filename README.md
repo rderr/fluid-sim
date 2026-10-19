@@ -1,80 +1,90 @@
-# Tilt fluid for the LOLIN S3 Mini Pro
+# fluid-sim
 
-A particle fluid that sloshes around the 128x128 display when you tilt or
-shake the board. Gravity comes from the onboard QMI8658C accelerometer.
+A particle fluid that sloshes around a 128×128 display when you tilt or
+shake the board. Runs on the [LOLIN S3 Mini Pro](https://www.wemos.cc/en/latest/s3/s3_mini_pro.html)
+(ESP32-S3, 0.85" TFT, QMI8658C IMU) at 50–60 fps with 780 particles, plus a
+heat-convection mode where a heater follows gravity and plumes roll through
+the pool.
+
+- Smoothed-particle fluid (Clavet et al. double density relaxation) in a
+  self-contained header you can also run on your desktop.
+- Gravity comes straight from the accelerometer: tilting *and* shaking move
+  the liquid the right way, because the effective gravity in the board's
+  frame is minus the measured acceleration.
+- Hand-written drivers for the GC9107 panel (DMA, double-buffered) and the
+  QMI8658C IMU. No display library to configure.
+- Physics on core 1, rendering on core 0, with the heaviest solver passes
+  split across both cores.
+- Four colour themes and a thermal mode, all on the buttons. Settings
+  persist in flash.
+
+## Hardware
+
+Just the board. No wiring. Everything used (TFT, IMU, three buttons) is on
+the LOLIN S3 Mini Pro. Pin assignments are in [docs/HARDWARE.md](docs/HARDWARE.md).
 
 ## Build and flash
 
-PlatformIO (already installed in `~/.platformio`):
+[PlatformIO](https://platformio.org/) core is all you need (the VS Code
+extension or `pip install platformio` both work).
 
 ```
-~/.platformio/penv/bin/pio run -t upload
-~/.platformio/penv/bin/pio device monitor
+git clone https://github.com/rderr/fluid-sim.git
+cd fluid-sim
+pio run -t upload
+pio device monitor      # optional: stats, button events, calibration output
 ```
 
-The board enumerates as a USB JTAG/serial port and auto-resets for upload.
-If a board is still running the factory MicroPython, hold BOOT (IO0) while
-plugging it in for the first flash; after that plain uploads work.
+**First flash on a board still running the factory MicroPython:** hold the
+BOOT button while plugging in the USB cable, then run the upload. MicroPython's
+USB stack can't be reset into the bootloader by esptool. After that, plain
+`pio run -t upload` works every time.
 
 ## Controls
 
-| Button | Action |
-|---|---|
-| IO47 | Cycle the accelerometer-to-screen axis mapping. Saved to flash. |
-| IO48 | Short press: respawn the fluid. Hold 1.5 s with the board flat on a level table: calibrate the accelerometer bias ("level"), saved to flash. |
-| IO0 (BOOT) | Cycle mode: water, lava, slime, mercury themes, then heat convection. Saved to flash. Typing `m` on the serial port does the same; `p` toggles per-phase timing output. |
+| Button | Press | Hold 1.5 s |
+|---|---|---|
+| IO0 (BOOT) | Next mode: water, lava, slime, mercury, heat convection | |
+| IO47 | Next IMU-to-screen mapping (if the liquid falls the wrong way) | |
+| IO48 | Respawn the fluid | Calibrate "level" (board flat on a table) |
 
-## Heat convection mode
+Over the serial port, `m` cycles the mode and `p` toggles per-phase timing
+output.
 
-The last mode in the cycle gives every particle a temperature. The wall that
-gravity points at is a heater, the opposite wall is a cold sink, exposed
-surface particles cool toward ambient, and heat diffuses between neighbours.
-Hot fluid feels less gravity than the pool's average and rises; cool fluid
-sinks, so plumes and rolling cells form, and they lean with the board when
-you tilt it. Colours run deep blue (cold) through red and orange to white
-(hot). The knobs (`heatRate`, `coolRate`, `coolBulk`, `diffusion`,
-`buoyancy`) are documented in `src/fluid.h`; the harness previews it with
-`HEAT=1 HOLD=1 TILT=0`.
+## Tuning
 
-**Orientation:** the default IMU-to-screen mapping (2) was checked on
-hardware. If the liquid ever runs sideways or uphill, press IO47 to cycle:
-mappings 0-3 are the four rotations, 4-7 the same four mirrored. The choice
-is saved to flash.
+Every physical knob (thickness, splashiness, cohesion, compressibility,
+gravity scale, heater strength, buoyancy…) is a documented field in
+`src/fluid.h`, with a note on what you see when it goes up or down.
+[docs/TUNING.md](docs/TUNING.md) walks through them in plain language and
+shows how to preview a change on your desktop before flashing:
 
-Note for anyone changing the button code: the LOLIN S3 Mini Arduino variant
-defines pin 47 as `RGB_BUILTIN`, and the core's `pinMode`/`digitalRead`
-silently redirect it, so the buttons use the raw IDF GPIO API.
+```
+c++ -O2 -std=c++11 -Isrc tools/sim_test.cpp -o /tmp/sim_test
+SIGMA=5 /tmp/sim_test /tmp/frames      # prints stats, writes BMP frames
+```
 
 ## How it works
 
-- `src/fluid.h` is a Clavet-style particle fluid (double density relaxation
-  with a near-pressure term) on a 22x22 spatial hash. 780 particles, two
-  fixed 1/120 s substeps per frame (the relaxation scheme is only stable at
-  a fixed step, so a sub-60 fps frame plays slightly slow rather than wobble). Neighbour pairs are found every other substep (geometry refreshed in
-  between) into a compact list that the viscosity, density and relaxation
-  passes all reuse. Pair
-  discovery, density, displacement and geometry refresh are split between
-  both cores (a helper task on core 0 takes half the grid rows / pairs), and
-  heat diffusion runs on core 0 alongside the viscosity pass.
-- `src/render.h` splats particles into an 8-bit density field and maps it
-  through a colour LUT, giving a metaball look with a bright surface rim.
-  It works in 32-row bands to save RAM and runs on core 0 from a position
-  snapshot, overlapping the physics.
-- `src/display.h` is a tiny GC9107 driver streaming the 32 KB framebuffer over
-  SPI at 40 MHz with DMA, double-buffered.
-- `src/imu.h` is a register-level QMI8658C driver (I2C on SDA 12 / SCL 11).
-- `src/main.cpp` wires it together. Effective gravity is minus the measured
-  proper acceleration, so shaking the board moves the liquid the right way.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the solver, the
+renderer, the dual-core pipeline, the frame budget, and the things that
+were tried and didn't pay off.
 
-## Desktop test
-
-The physics and renderer have no Arduino dependencies and can be run on the
-host to tune parameters or check stability:
+## Project layout
 
 ```
-c++ -O2 -std=c++17 -Isrc tools/sim_test.cpp -o /tmp/sim_test
-/tmp/sim_test /tmp/frames        # writes BMP frames + stats
+platformio.ini       board + build flags
+src/main.cpp         loop: IMU → physics → render → display; buttons, modes, settings
+src/fluid.h          particle fluid + heat convection (no Arduino deps)
+src/render.h         density splat → colour LUT framebuffer (no Arduino deps)
+src/display.h        GC9107 driver, DMA SPI, double buffer
+src/imu.h            QMI8658C driver with retry + I2C bus recovery
+tools/sim_test.cpp   desktop harness: scripted tilt/shake, stats, BMP frames
+docs/                hardware, tuning, architecture notes
 ```
 
-Parameters can be overridden with env vars (`RHO0`, `K`, `KN`, `BETA`,
-`SIGMA`, `THR_RIM`, `THR_BODY`, `THR_DEEP`).
+## Status
+
+Working and tuned on one board. Things that would be nice: a mode where
+colour follows speed, a second liquid, and a gyro term so spinning the board
+swirls the pool.
