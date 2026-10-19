@@ -1,6 +1,6 @@
 // Renders the particle field into a 128x128 RGB565 framebuffer.
 // Particles are splatted into an 8-bit density field, which is then mapped
-// through a colour LUT: this gives a metaball-style "liquid" look with a
+// through a color LUT: this gives a metaball-style "liquid" look with a
 // bright rim at the surface. Pure C++, no Arduino deps.
 #pragma once
 #include <stdint.h>
@@ -31,7 +31,7 @@ struct Theme {
     : bg(bg_), deep(deep_), body(body_), rim(rim_), thrRim(tr), thrBody(tb), thrDeep(td) {}
 };
 
-// Colour themes. Index 0 is used for the thermal mode's background.
+// Color themes. Index 0 is used for the thermal mode's background.
 static const Theme THEMES[] = {
   // bg            deep            body            rim             thresholds
   Theme({  0,  0,  0}, { 10, 40,150}, { 20, 90,220}, {120,220,255}, 35, 75, 200),   // water

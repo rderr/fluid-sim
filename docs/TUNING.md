@@ -2,7 +2,7 @@
 
 All knobs live in `src/fluid.h` (`struct Params`), with a comment on each
 describing what you see when it goes up or down. The IMU smoothing and shake
-cap are in `src/main.cpp`; the look (splat size, thresholds, colours) is in
+cap are in `src/main.cpp`; the look (splat size, thresholds, colors) is in
 `src/render.h` and the theme table in `src/main.cpp`.
 
 ## Describing what you want
@@ -61,7 +61,7 @@ t= 4.00 g=( 0.00, 1.00) meanRho=1.85 maxV=27.3 meanV=7.7 lowerHalf=100% leftWall
 ## Frame-rate budget
 
 The board does about 20 ms of physics per frame at 780 particles with the
-current packing. Things that cost time, in order: neighbour discovery,
+current packing. Things that cost time, in order: neighbor discovery,
 displacement, viscosity, geometry refresh, density. Type `p` on the serial
 monitor to see the per-phase breakdown live.
 

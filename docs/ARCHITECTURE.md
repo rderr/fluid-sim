@@ -11,7 +11,7 @@ physics substep 2 ──┤ pair passes split ───► helper task: half of 
                     │                        density, displacement, refresh;
                     ▼                        heat diffusion during viscosity
 copy position (+temperature) snapshot ─────► render task: splat bands,
-pace to 60 fps                               colour LUT, queue DMA frame
+pace to 60 fps                               color LUT, queue DMA frame
 ```
 
 The loop never waits on the display: `submitFrame()` waits only for the
@@ -26,14 +26,14 @@ simulation*, in 2D with pixel units:
 
 1. Gravity (per particle, scaled by buoyancy in heat mode), plus the
    fictitious forces of the board's spin about the screen normal, taken
-   about the box centre: centrifugal ω²r, Euler −α×r, Coriolis −2ω×v.
+   about the box center: centrifugal ω²r, Euler −α×r, Coriolis −2ω×v.
    ω comes from the gyro's z axis, α from its filtered derivative. The
-   forces are evaluated at real scale (`displayMm` gives metres per pixel)
+   forces are evaluated at real scale (`displayMm` gives meters per pixel)
    and converted to sim units through the gravity scale, so `spinGain`
    1.0 is physically faithful.
-2. Viscosity impulses over the neighbour list (sequential, in place).
+2. Viscosity impulses over the neighbor list (sequential, in place).
 3. Clamp speed, save positions, advect.
-4. Neighbour discovery on a 22×22 grid (cell = interaction radius) using a
+4. Neighbor discovery on a 22×22 grid (cell = interaction radius) using a
    half stencil so each pair is visited once. Runs every other substep; in
    between, the previous list's geometry is refreshed from current positions.
 5. Density and near-density per particle, pressure from the gap to rest
@@ -69,9 +69,9 @@ than the render task so it preempts drawing; the render has enough slack.
 ## Renderer (`src/render.h`)
 
 Particles are splatted with a 7×7 kernel into an 8-bit density field,
-which goes through a 256-entry colour LUT: below a rim threshold is
-background, a band above it is the bright rim, then body colour darkening
-to a deep colour. The field is built in 32-row bands to save 24 KB. In heat
+which goes through a 256-entry color LUT: below a rim threshold is
+background, a band above it is the bright rim, then body color darkening
+to a deep color. The field is built in 32-row bands to save 24 KB. In heat
 mode a second field accumulates temperature × weight; the per-pixel ratio
 indexes a thermal palette.
 

@@ -22,7 +22,7 @@ the pool.
   QMI8658C IMU. No display library to configure.
 - Physics on core 1, rendering on core 0, with the heaviest solver passes
   split across both cores.
-- Four colour themes and a thermal mode, all on the buttons. Settings
+- Four color themes and a thermal mode, all on the buttons. Settings
   persist in flash.
 
 ## Hardware
@@ -83,7 +83,7 @@ were tried and didn't pay off.
 platformio.ini       board + build flags
 src/main.cpp         loop: IMU → physics → render → display; buttons, modes, settings
 src/fluid.h          particle fluid + heat convection (no Arduino deps)
-src/render.h         density splat → colour LUT framebuffer (no Arduino deps)
+src/render.h         density splat → color LUT framebuffer (no Arduino deps)
 src/display.h        GC9107 driver, DMA SPI, double buffer
 src/imu.h            QMI8658C driver with retry + I2C bus recovery
 tools/sim_test.cpp   desktop harness: scripted tilt/shake, stats, BMP frames

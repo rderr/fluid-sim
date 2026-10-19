@@ -34,7 +34,7 @@ static inline float fastInvSqrt(float x) {
 // goes up or down. Changes can be previewed with tools/sim_test.cpp before
 // flashing (env vars RHO0, K, KN, SIGMA, BETA, GRAV).
 struct Params {
-  // Cohesion / surface tension. Sum of (1-q)^2 over neighbours at rest.
+  // Cohesion / surface tension. Sum of (1-q)^2 over neighbors at rest.
   //   up:   liquid beads up, holds together, clings to walls, fewer stray
   //         droplets; too high and it clumps into lumps and looks lumpy.
   //   down: falls apart easily into spray, wets walls less, flatter surface;
@@ -74,17 +74,17 @@ struct Params {
   //         gentle tilts only tip the surface.
   float gravity       = 1000.f;
 
-  // Neighbour discovery every substep (true) or every other substep with a
+  // Neighbor discovery every substep (true) or every other substep with a
   // geometry refresh in between (false). Halving discovery saves ~15% of the
   // frame; particles move well under a pixel per substep so little is missed.
   bool discoverEveryStep = false;
 
-  // Wall ghost density. The wall counts as a layer of neighbours so particles
+  // Wall ghost density. The wall counts as a layer of neighbors so particles
   // touching it feel normal pressure instead of the negative (cohesive)
   // pressure that makes a film cling to the wall.
   //   up:   walls shed liquid cleanly, no stuck lines; too high and the
   //         liquid hovers a pixel or two off the walls.
-  //   down: liquid wets and clings to the walls (0 = old behaviour).
+  //   down: liquid wets and clings to the walls (0 = old behavior).
   float wallDensity   = 1.0f;
 
   // Speed cap, px/s. Safety limit so no particle skips a grid cell in one
@@ -94,7 +94,7 @@ struct Params {
   // Physical size of the display's active area (mm across the W pixels).
   // Sets the real-world scale of a pixel, which the spin forces need: they
   // grow with the real radius, so a 15 mm panel swirls far less than a
-  // metre-wide tank would. LOLIN S3 Mini Pro: 0.85" square panel.
+  // meter-wide tank would. LOLIN S3 Mini Pro: 0.85" square panel.
   float displayMm     = 15.3f;
 
   // Spin response. When the board rotates about the screen normal the
@@ -121,7 +121,7 @@ struct Params {
   //   up: hot plumes die quickly at the top, strong sinking flow.
   //   down: heat accumulates and the whole pool warms up.
   float coolRate      = 1.5f;
-  // Thermal diffusion between neighbours, 1/s.
+  // Thermal diffusion between neighbors, 1/s.
   //   up: smooth temperature, plumes blur into broad warm regions.
   //   down: sharp thin plumes that keep their identity longer.
   float diffusion     = 2.0f;
@@ -213,10 +213,10 @@ public:
       for (int i = 0; i < n; ++i) { vx[i] += ax; vy[i] += ay; }
     }
     // 1b. fictitious forces from the board spinning about the screen normal,
-    //     taken about the box centre: centrifugal w^2 r, Euler -alpha x r,
+    //     taken about the box center: centrifugal w^2 r, Euler -alpha x r,
     //     Coriolis -2 w x v (screen frame: x right, y down, z into screen)
     if (p.spinGain > 0.f && (omega != 0.f || alpha != 0.f)) {
-      // real metres per pixel, then physical m/s^2 -> sim px/s^2 via the
+      // real meters per pixel, then physical m/s^2 -> sim px/s^2 via the
       // gravity scale (p.gravity px/s^2 per 9.81 m/s^2)
       const float mPerPx = p.displayMm * 1e-3f / W;
       const float g = p.spinGain * mPerPx * (p.gravity / 9.81f) * dt;
@@ -254,7 +254,7 @@ public:
       px[i] += vx[i] * dt; py[i] += vy[i] * dt;
     }
 
-    // 4. find neighbour pairs once, then double density relaxation
+    // 4. find neighbor pairs once, then double density relaxation
     lap(6);
     if (p.discoverEveryStep || (stepCount_++ & 1) == 0 || nPairs_ + (MAX_PAIRS - b0_) == 0) {
       buildGrid();
@@ -299,7 +299,7 @@ public:
     }
     const float dt2 = dt * dt;
     if (p.wallDensity > 0.f) {
-      // the wall pushes back like an immovable neighbour
+      // the wall pushes back like an immovable neighbor
       for (int i = 0; i < n; ++i) {
         float qs[4] = { (px[i] - WALL) * invH, (W - WALL - px[i]) * invH,
                         (py[i] - WALL) * invH, (H - WALL - py[i]) * invH };
@@ -339,7 +339,7 @@ public:
     // 5. walls + 6. velocity from positions
     const float invDt = 1.0f / dt;
     for (int i = 0; i < n; ++i) {
-      if (!(px[i] == px[i]) || !(py[i] == py[i])) {   // NaN guard: respawn at the centre
+      if (!(px[i] == px[i]) || !(py[i] == py[i])) {   // NaN guard: respawn at the center
         px[i] = W * 0.5f; py[i] = H * 0.5f; ox_[i] = px[i]; oy_[i] = py[i];
       }
       if (px[i] < WALL) px[i] = WALL; else if (px[i] > W - WALL) px[i] = W - WALL;
@@ -359,7 +359,7 @@ public:
 
 private:
   // Heater on the wall gravity points at, cold sink on the opposite wall,
-  // surface cooling where the neighbourhood is sparse, diffusion over pairs.
+  // surface cooling where the neighborhood is sparse, diffusion over pairs.
   void heatStep(float dt, float gx, float gy, float invH) {
     // The heater is the whole wall whose outward direction is closest to
     // gravity (switches at 45 degrees); the cold sink is the opposite wall.
@@ -371,7 +371,7 @@ private:
     else            { hotEdge = gy > 0 ? H - WALL : WALL; coldEdge = gy > 0 ? WALL : H - WALL; }
     float meanRho = 0; for (int i = 0; i < n; ++i) meanRho += rho_[i];
     meanRho = n ? meanRho / n : 1.f;
-    const float surfaceRho = 0.7f * meanRho;        // sparse neighbourhood = exposed surface
+    const float surfaceRho = 0.7f * meanRho;        // sparse neighborhood = exposed surface
     const float bulk = p.coolBulk * dt;
     for (int i = 0; i < n; ++i) {
       float c = horizontal ? px[i] : py[i];
@@ -390,7 +390,7 @@ private:
     }
   }
 
-  // Explicit diffusion over the pair list (k*dt*neighbours stays well below 1).
+  // Explicit diffusion over the pair list (k*dt*neighbors stays well below 1).
   // Touches only temp[], so it can run on the helper while this core runs
   // the viscosity pass (which touches only velocities).
   float diffK_ = 0.f;
@@ -408,7 +408,7 @@ private:
 
 public:
 
-  // Average neighbour density (diagnostic).
+  // Average neighbor density (diagnostic).
   float meanDensity() const {
     float s = 0; for (int i = 0; i < n; ++i) s += rho_[i];
     return n ? s / n : 0.f;
@@ -462,7 +462,7 @@ private:
     }
   }
 
-  // Neighbour pair cache: unit vector from i to j and q = r/h.
+  // Neighbor pair cache: unit vector from i to j and q = r/h.
   struct Pair {
     uint16_t i, j;
     float nx_, ny_, q_;
@@ -583,7 +583,7 @@ private:
         int c = cy * GW + cx;
         int s0 = cellStart_[c], s1 = cellStart_[c + 1];
         if (s0 == s1) continue;
-        // Half-stencil: self cell plus 4 forward neighbours -> each pair once.
+        // Half-stencil: self cell plus 4 forward neighbors -> each pair once.
         static const int8_t NX[5] = {0, 1, -1, 0, 1};
         static const int8_t NY[5] = {0, 0,  1, 1, 1};
         for (int k = 0; k < 5; ++k) {
