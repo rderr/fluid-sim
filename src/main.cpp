@@ -157,6 +157,7 @@ static void applyTheme() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);                 // never block the frame loop on a host that isn't reading
   delay(200);                               // let the panel's supply settle after reset
   buttonInit(BTN_ORIENT);
   buttonInit(BTN_RESET);
@@ -199,6 +200,8 @@ void loop() {
   static uint32_t statT = millis();
   static int frames = 0;
   static uint32_t simUs = 0;
+  static uint32_t maxFrameUs = 0, maxImuUs = 0, maxSimUs = 0, maxSubmitUs = 0;
+  uint32_t frameStart = micros();
 
   // --- input -------------------------------------------------------------
   if (btnOrient.pressed()) {
@@ -231,7 +234,10 @@ void loop() {
   // --- gravity from the IMU ---------------------------------------------
   float gx, gy;
   float ax, ay, az, wx, wy, wz;
-  if (imuOk && imu::read(ax, ay, az, wx, wy, wz)) {
+  uint32_t imuT0 = micros();
+  bool imuRead = imuOk && imu::read(ax, ay, az, wx, wy, wz);
+  uint32_t imuUs = micros() - imuT0; if (imuUs > maxImuUs) maxImuUs = imuUs;
+  if (imuRead) {
     fAx += ((ax - biasX) - fAx) * ACCEL_ALPHA;
     fAy += ((ay - biasY) - fAy) * ACCEL_ALPHA;
     float sx, sy;
@@ -249,16 +255,21 @@ void loop() {
   float frameDt = lastFrameDt;
   if (frameDt < FRAME_MIN) frameDt = FRAME_MIN; else if (frameDt > FRAME_MAX) frameDt = FRAME_MAX;
   for (int s = 0; s < SUBSTEPS; ++s) sim.step(frameDt / SUBSTEPS, gx, gy);
-  simUs += micros() - t0;
+  uint32_t thisSim = micros() - t0; simUs += thisSim; if (thisSim > maxSimUs) maxSimUs = thisSim;
+  uint32_t subT0 = micros();
   submitFrame();                            // hands the frame to core 0
+  uint32_t subUs = micros() - subT0; if (subUs > maxSubmitUs) maxSubmitUs = subUs;
 
   // --- stats -------------------------------------------------------------
   frames++;
+  uint32_t thisFrame = micros() - frameStart; if (thisFrame > maxFrameUs) maxFrameUs = thisFrame;
   uint32_t now = millis();
-  if (now - statT >= 2000) {
-    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
+  if (now - statT >= 2000 && Serial) {      // only when a host is listening
+    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
                   frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames,
+                  maxFrameUs / 1000.f, maxImuUs / 1000.f, maxSimUs / 1000.f, maxSubmitUs / 1000.f,
                   orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f);
+    maxFrameUs = maxImuUs = maxSimUs = maxSubmitUs = 0;
     if (profiling) {
     Serial.printf("   per frame: grid %.1f pairs %.1f dens %.1f disp %.1f visc %.1f heat %.1f rest %.1f ms, pairs %d\n",
                   sim.prof[0] / 1000.f / frames, sim.prof[1] / 1000.f / frames, sim.prof[2] / 1000.f / frames,
