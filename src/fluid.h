@@ -32,11 +32,11 @@ static inline float fastInvSqrt(float x) {
 
 struct Params {
   float restDensity   = 1.8f;     // rho0 (sum of (1-q)^2 over neighbours)
-  float stiffness     = 8000.f;   // k
-  float nearStiffness = 16000.f;  // k_near (anti-clustering)
-  float viscSigma     = 0.5f;     // linear viscosity
-  float viscBeta      = 0.3f;     // quadratic viscosity
-  float gravity       = 1000.f;   // px/s^2 per 1 g
+  float stiffness     = 6000.f;   // k
+  float nearStiffness = 12000.f;  // k_near (anti-clustering)
+  float viscSigma     = 3.0f;     // linear viscosity: damps rest jitter and small sloshes
+  float viscBeta      = 0.3f;     // quadratic viscosity: tames hard impacts
+  float gravity       = 500.f;    // px/s^2 per 1 g (lower = behaves like a bigger tank)
   float maxSpeed      = 0.9f * CELL * 120.f; // px/s; cap so particles never skip a cell
 };
 

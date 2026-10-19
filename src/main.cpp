@@ -25,7 +25,7 @@ constexpr int BTN_THEME  = 0;
 constexpr int   PARTICLES   = 400;
 constexpr float SUB_DT      = 1.f / 120.f;   // physics substep
 constexpr int   SUBSTEPS    = 2;             // per rendered frame
-constexpr float ACCEL_ALPHA = 0.35f;         // IMU low-pass (per frame)
+constexpr float ACCEL_ALPHA = 0.2f;          // IMU low-pass (per frame); lower = smoother
 constexpr float ACCEL_MAX   = 2.5f;          // clamp shakes to +/-2.5 g
 
 static fluid::Sim      sim;

@@ -49,6 +49,8 @@ int main(int argc, char** argv) {
   sim.p.nearStiffness = envf("KN", sim.p.nearStiffness);
   sim.p.viscBeta      = envf("BETA", sim.p.viscBeta);
   sim.p.viscSigma     = envf("SIGMA", sim.p.viscSigma);
+  sim.p.gravity       = envf("GRAV", sim.p.gravity);
+  float tiltG         = envf("TILT", 0.8f);
   render::Theme th;
   th.thrRim  = (uint8_t)envf("THR_RIM", th.thrRim);
   th.thrBody = (uint8_t)envf("THR_BODY", th.thrBody);
@@ -64,7 +66,7 @@ int main(int argc, char** argv) {
     // scripted tilt: rest, tilt right, tilt up (upside down), shake, rest
     float gx = 0, gy = 1;
     float t = fr / 60.f;
-    if (t > 2 && t < 4)      { gx = 0.8f; gy = 0.6f; }
+    if (t > 2 && t < 4)      { gx = tiltG; gy = sqrtf(1.f - tiltG * tiltG); }
     else if (t > 4 && t < 6) { gx = 0; gy = -1; }
     else if (t > 6 && t < 8) { gx = 3.f * sinf(t * 40.f); gy = 1; }
 
@@ -84,11 +86,12 @@ int main(int argc, char** argv) {
       float v = sqrtf(sim.vx[i] * sim.vx[i] + sim.vy[i] * sim.vy[i]);
       if (v > maxV) maxV = v;
     }
-    if (fr % 60 == 0 || fr == frames - 1) {
+    if (fr % 30 == 0 || fr == frames - 1) {
       // fluid height estimate: fraction of particles in lower half
       int lower = 0; for (int i = 0; i < sim.n; ++i) if (sim.py[i] > fluid::H / 2) lower++;
-      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f lowerHalf=%3d%%\n",
-             t, gx, gy, sim.meanDensity(), maxV, lower * 100 / sim.n);
+      float sumV = 0; for (int i = 0; i < sim.n; ++i) sumV += sqrtf(sim.vx[i]*sim.vx[i] + sim.vy[i]*sim.vy[i]);
+      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%%\n",
+             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n);
       char path[512]; snprintf(path, sizeof path, "%s/frame_%03d.bmp", out, fr);
       writeBmp(path, rend.fb);
     }
