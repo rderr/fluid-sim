@@ -116,6 +116,21 @@ THEME=2 HOLD=1 TILT=0 SWAY=0.6 SECONDS=10 START=2 DUMP=3 /tmp/sim_test /tmp/anim
 the default tilt, flip, shake, settle sequence. Assemble the frames with
 Pillow or ImageMagick (`magick /tmp/anim/anim_*.bmp -scale 200% -delay 5 -loop 0 out.gif`).
 
+## Acknowledgements
+
+- The solver implements Clavet, Beaudoin and Poulin, *Particle-based
+  Viscoelastic Fluid Simulation*, SCA 2005. The step structure (viscosity
+  impulses, advection, double density relaxation, velocity from positions)
+  is theirs; the code is this project's.
+- The GC9107 init sequence and panel offsets come from the
+  [CircuitPython](https://circuitpython.org/) board definition for the
+  LOLIN S3 Mini Pro (MIT licensed), the one sequence verified to work on
+  this panel.
+- Pin assignments are from the Wemos schematic. The QMI8658C register map
+  is from the QST datasheet, cross-checked against the
+  [FastIMU](https://github.com/LiquidCGS/FastIMU) driver.
+- The fast inverse square root is the classic Quake III routine.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
