@@ -99,7 +99,7 @@ struct Params {
   //   up:   a flick of the wrist sends the pool around the box, steady
   //         spinning plasters it against the walls.
   //   down: only fast spins have a visible effect.
-  float spinGain      = 1.0f;
+  float spinGain      = 0.3f;   // 1.0 is the physical strength at the sim scale: too lively for a hand-held board
 
   // ---- Heat convection (only used when heat is enabled) ----------------
   // Temperatures run 0 (cold) to 1 (heater). The wall that gravity points
