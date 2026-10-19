@@ -1,0 +1,201 @@
+// Tilt-reactive fluid simulation for the LOLIN S3 Mini Pro
+// (ESP32-S3, 128x128 GC9107 TFT, QMI8658C IMU).
+//
+// The accelerometer reading is the board's proper acceleration; in the board
+// frame the liquid feels an effective gravity equal to minus that vector, so
+// tilting AND shaking the board both slosh the fluid correctly.
+//
+// Buttons:
+//   IO47  cycle the accelerometer-to-screen axis mapping (saved to flash).
+//         If the water runs "uphill", press until it falls the right way.
+//   IO48  respawn the fluid.
+//   IO0   cycle colour theme.
+#include <Arduino.h>
+#include <Preferences.h>
+#include <driver/gpio.h>
+#include "fluid.h"
+#include "render.h"
+#include "display.h"
+#include "imu.h"
+
+constexpr int BTN_ORIENT = 47;
+constexpr int BTN_RESET  = 48;
+constexpr int BTN_THEME  = 0;
+
+constexpr int   PARTICLES   = 400;
+constexpr float SUB_DT      = 1.f / 120.f;   // physics substep
+constexpr int   SUBSTEPS    = 2;             // per rendered frame
+constexpr float ACCEL_ALPHA = 0.35f;         // IMU low-pass (per frame)
+constexpr float ACCEL_MAX   = 2.5f;          // clamp shakes to +/-2.5 g
+
+static fluid::Sim      sim;
+static render::Renderer rend;
+static Preferences     prefs;
+
+// Rendering runs on core 0 from a snapshot of particle positions while the
+// physics for the next frame runs on core 1.
+static float snapX[fluid::MAX_P], snapY[fluid::MAX_P];
+static int   snapN = 0;
+static SemaphoreHandle_t renderGo, renderDone;
+static uint32_t drawUsAcc = 0;
+
+static void renderTask(void*) {
+  for (;;) {
+    xSemaphoreTake(renderGo, portMAX_DELAY);
+    uint32_t t0 = micros();
+    rend.draw(snapX, snapY, snapN);
+    drawUsAcc += micros() - t0;
+    display::pushFrame(rend.fb);            // waits for the previous DMA, queues this one
+    xSemaphoreGive(renderDone);
+  }
+}
+
+static void submitFrame() {
+  xSemaphoreTake(renderDone, portMAX_DELAY); // previous frame fully drawn and queued
+  memcpy(snapX, sim.px, sim.n * sizeof(float));
+  memcpy(snapY, sim.py, sim.n * sizeof(float));
+  snapN = sim.n;
+  xSemaphoreGive(renderGo);
+}
+
+static bool  imuOk = false;
+static int   orientation = 2;       // 0..7: 4 rotations (0-3) x mirror (4-7); 2 matches the board
+static int   theme = 0;
+static float fAx = 0.f, fAy = 0.f;  // filtered chip-frame accel (g)
+
+static const render::Theme THEMES[] = {
+  // bg            deep            body            rim
+  { {  0,  0,  0}, { 10, 40,150}, { 20, 90,220}, {120,220,255}, 35, 75, 200 },   // water
+  { {  0,  0,  0}, {150, 20,  0}, {240,110,  0}, {255,235,120}, 35, 75, 200 },   // lava
+  { {  0,  0,  0}, { 10,120, 40}, { 40,220, 90}, {200,255,200}, 35, 75, 200 },   // slime
+  { {  0,  0,  0}, { 90, 90,110}, {170,170,190}, {255,255,255}, 35, 75, 200 },   // mercury
+};
+constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
+
+// Map chip-frame (x, y) to screen-frame (+x right, +y down).
+static void mapAxes(int mode, float x, float y, float& ox, float& oy) {
+  if (mode & 4) x = -x;                       // mirror
+  for (int r = 0; r < (mode & 3); ++r) {      // rotate 90 deg
+    float t = x; x = -y; y = t;
+  }
+  ox = x; oy = y;
+}
+
+static void buttonInit(int pin) {
+  // Raw IDF call: the Arduino variant maps pin 47 to RGB_BUILTIN and treats
+  // it specially, so pinMode/digitalRead cannot be trusted for it.
+  gpio_config_t c = {};
+  c.pin_bit_mask = 1ULL << pin; c.mode = GPIO_MODE_INPUT;
+  c.pull_up_en = GPIO_PULLUP_ENABLE; c.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  c.intr_type = GPIO_INTR_DISABLE;
+  gpio_config(&c);
+}
+static inline int buttonRead(int pin) { return gpio_get_level((gpio_num_t)pin); }
+
+struct Button {
+  int pin; uint32_t lowSince; bool armed;
+  // armed starts false: a press only counts after the button has been seen
+  // released once, so a pin that is low at boot cannot fire.
+  explicit Button(int p) : pin(p), lowSince(0), armed(false) {}
+  // True once per press. The input must read LOW continuously for HOLD_MS
+  // before it counts, so glitches from handling the board or coupling from
+  // the SPI lines cannot register as presses.
+  static constexpr uint32_t HOLD_MS = 50;
+  bool pressed() {
+    uint32_t t = millis();
+    if (buttonRead(pin) == HIGH) { lowSince = 0; armed = true; return false; }
+    if (lowSince == 0) { lowSince = t; return false; }
+    if (armed && t - lowSince >= HOLD_MS) { armed = false; return true; }
+    return false;
+  }
+};
+static Button btnOrient{BTN_ORIENT}, btnReset{BTN_RESET}, btnTheme{BTN_THEME};
+
+static void applyTheme() { rend.setTheme(THEMES[theme]); }
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);                               // let the panel's supply settle after reset
+  buttonInit(BTN_ORIENT);
+  buttonInit(BTN_RESET);
+  buttonInit(BTN_THEME);
+
+  prefs.begin("fluid", false);
+  orientation = prefs.getInt("orientation2", 2) & 7;
+  theme       = prefs.getInt("theme", 0) % THEME_COUNT;
+
+  display::begin();
+  imuOk = imu::begin();
+
+  sim.reset(PARTICLES);
+  applyTheme();
+  renderGo   = xSemaphoreCreateBinary();
+  renderDone = xSemaphoreCreateBinary();
+  xSemaphoreGive(renderDone);
+  xTaskCreatePinnedToCore(renderTask, "render", 4096, nullptr, 2, nullptr, 0);
+  submitFrame();
+  delay(50);
+  display::setBacklight(true);
+
+  Serial.printf("fluid sim: %d particles, IMU %s (0x%02X), orientation %d (saved %s), theme %d, IO47=%d IO48=%d IO0=%d\n",
+                sim.n, imuOk ? "ok" : "NOT FOUND - demo mode", imu::address(), orientation,
+                prefs.isKey("orientation2") ? "present" : "absent", theme,
+                buttonRead(BTN_ORIENT), buttonRead(BTN_RESET), buttonRead(BTN_THEME));
+}
+
+void loop() {
+  static uint32_t lastFrame = micros();
+  static uint32_t statT = millis();
+  static int frames = 0;
+  static uint32_t simUs = 0;
+
+  // --- input -------------------------------------------------------------
+  if (btnOrient.pressed()) {
+    orientation = (orientation + 1) & 7;
+    prefs.putInt("orientation2", orientation);
+    Serial.printf("orientation -> %d (button IO47 held %lu ms)\n", orientation, (unsigned long)(millis() - btnOrient.lowSince));
+  }
+  if (btnReset.pressed()) sim.reset(PARTICLES);
+  if (btnTheme.pressed()) {
+    theme = (theme + 1) % THEME_COUNT;
+    prefs.putInt("theme", theme);
+    applyTheme();
+  }
+
+  // --- gravity from the IMU ---------------------------------------------
+  float gx, gy;
+  float ax, ay, az, wx, wy, wz;
+  if (imuOk && imu::read(ax, ay, az, wx, wy, wz)) {
+    fAx += (ax - fAx) * ACCEL_ALPHA;
+    fAy += (ay - fAy) * ACCEL_ALPHA;
+    float sx, sy;
+    mapAxes(orientation, fAx, fAy, sx, sy);
+    gx = -sx; gy = -sy;                       // effective gravity = -proper acceleration
+    float m = sqrtf(gx * gx + gy * gy);
+    if (m > ACCEL_MAX) { gx *= ACCEL_MAX / m; gy *= ACCEL_MAX / m; }
+  } else {
+    float t = millis() * 0.001f;              // demo: slowly rotating gravity
+    gx = sinf(t * 0.7f); gy = cosf(t * 0.7f);
+  }
+
+  // --- simulate + draw ---------------------------------------------------
+  uint32_t t0 = micros();
+  for (int s = 0; s < SUBSTEPS; ++s) sim.step(SUB_DT, gx, gy);
+  simUs += micros() - t0;
+  submitFrame();                            // hands the frame to core 0
+
+  // --- stats -------------------------------------------------------------
+  frames++;
+  uint32_t now = millis();
+  if (now - statT >= 2000) {
+    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
+                  frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames,
+                  orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f);
+    statT = now; frames = 0; simUs = 0; drawUsAcc = 0;
+  }
+
+  // Pace to ~60 fps so the physics timestep stays honest.
+  uint32_t frameUs = micros() - lastFrame;
+  if (frameUs < 16667) delayMicroseconds(16667 - frameUs);
+  lastFrame = micros();
+}
