@@ -61,7 +61,8 @@ int main(int argc, char** argv) {
   sim.p.coolRate      = envf("COOLR", sim.p.coolRate);
   sim.p.diffusion     = envf("DIFF", sim.p.diffusion);
   sim.p.buoyancy      = envf("BUOY", sim.p.buoyancy);
-  sim.p.coolBulk      = envf("COOLB", sim.p.coolBulk);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
+  sim.p.coolBulk      = envf("COOLB", sim.p.coolBulk);
+  sim.p.discoverEveryStep = envf("DISC", 0) > 0;  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
   float fps = envf("FPS", 60.f);            // frame rate the substeps are sized for
   const float dt = 1.f / (fps * substeps);
   render::Theme th;

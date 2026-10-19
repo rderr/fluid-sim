@@ -12,7 +12,7 @@ namespace fluid {
 
 constexpr int W = 128;
 constexpr int H = 128;
-constexpr int MAX_P = 704;
+constexpr int MAX_P = 832;
 
 constexpr float RADIUS = 6.0f;     // interaction radius h (px)
 constexpr int   CELL = 6;          // spatial hash cell size, must be >= RADIUS
@@ -73,6 +73,11 @@ struct Params {
   //   down: lighter and slower, behaves like a large tank: lazy sloshing,
   //         gentle tilts only tip the surface.
   float gravity       = 1000.f;
+
+  // Neighbour discovery every substep (true) or every other substep with a
+  // geometry refresh in between (false). Halving discovery saves ~15% of the
+  // frame; particles move well under a pixel per substep so little is missed.
+  bool discoverEveryStep = false;
 
   // Wall ghost density. The wall counts as a layer of neighbours so particles
   // touching it feel normal pressure instead of the negative (cohesive)
@@ -215,9 +220,13 @@ public:
 
     // 4. find neighbour pairs once, then double density relaxation
     lap(6);
-    buildGrid();
-    lap(0);
-    findPairs();
+    if (p.discoverEveryStep || (stepCount_++ & 1) == 0 || nPairs_ + (MAX_PAIRS - b0_) == 0) {
+      buildGrid();
+      lap(0);
+      findPairs();
+    } else {
+      refreshPairs();     // reuse last step's list; particles moved < 1 px since
+    }
     lap(1);
     for (int i = 0; i < n; ++i) { rho_[i] = 0.f; rhoN_[i] = 0.f; }
     if (helper.start) {
@@ -353,7 +362,7 @@ private:
     for (int c = 0; c < MAX_PAIRS; ++c) {
       if (c == nPairs_) { c = b0_; if (c >= MAX_PAIRS) break; }
       const Pair& pr = pairs_[c];
-      float w = 1.f - pr.q;
+      float w = 1.f - pr.q();
       if (w <= 0.f) continue;
       float f = k * w * (temp[pr.j] - temp[pr.i]);
       temp[pr.i] += f; temp[pr.j] -= f;
@@ -374,6 +383,7 @@ private:
   float dx_[MAX_P], dy_[MAX_P];
   float rhoB_[MAX_P], rhoNB_[MAX_P], dxB_[MAX_P], dyB_[MAX_P];   // helper's partial sums
   float dt2_ = 0.f;
+  uint32_t stepCount_ = 0;
 
 
   void viscosityRange(int a, int b, float dt) {
@@ -381,12 +391,12 @@ private:
     for (int k = a; k < b; ++k) {
       const Pair& pr = pairs_[k];
       int i = pr.i, j = pr.j;
-      float u = (vx[i] - vx[j]) * pr.nx + (vy[i] - vy[j]) * pr.ny;
-      if (u > 0.f && pr.q < 1.f) {
-        float I = dt * (1.f - pr.q) * (sig * u + beta * u * u) * 0.5f;
+      float u = (vx[i] - vx[j]) * pr.nx() + (vy[i] - vy[j]) * pr.ny();
+      if (u > 0.f && pr.q() < 1.f) {
+        float I = dt * (1.f - pr.q()) * (sig * u + beta * u * u) * 0.5f;
         if (I > u * 0.5f) I = u * 0.5f;   // never reverse the relative velocity
-        vx[i] -= I * pr.nx; vy[i] -= I * pr.ny;
-        vx[j] += I * pr.nx; vy[j] += I * pr.ny;
+        vx[i] -= I * pr.nx(); vy[i] -= I * pr.ny();
+        vx[j] += I * pr.nx(); vy[j] += I * pr.ny();
       }
     }
   }
@@ -394,7 +404,7 @@ private:
   void densityRange(int a, int b, float* rho, float* rhoN) const {
     for (int k = a; k < b; ++k) {
       const Pair& pr = pairs_[k];
-      float w = 1.f - pr.q;
+      float w = 1.f - pr.q();
       if (w <= 0.f) continue;                 // in the skin, not in range
       float w2 = w * w, w3 = w2 * w;
       rho[pr.i] += w2; rhoN[pr.i] += w3;
@@ -406,18 +416,25 @@ private:
     for (int k = a; k < b; ++k) {
       const Pair& pr = pairs_[k];
       int i = pr.i, j = pr.j;
-      float w = 1.f - pr.q;
+      float w = 1.f - pr.q();
       if (w <= 0.f) continue;
       float D = dt2 * ((pr_[i] + pr_[j]) * w + (prN_[i] + prN_[j]) * w * w) * 0.5f;
-      float Dx = D * pr.nx, Dy = D * pr.ny;
+      float Dx = D * pr.nx(), Dy = D * pr.ny();
       dx[i] -= Dx; dy[i] -= Dy;
       dx[j] += Dx; dy[j] += Dy;
     }
   }
 
   // Neighbour pair cache: unit vector from i to j and q = r/h.
-  struct Pair { uint16_t i, j; float nx, ny, q; };
-  static constexpr int MAX_PAIRS = 6400;
+  struct Pair {
+    uint16_t i, j;
+    float nx_, ny_, q_;
+    inline float nx() const { return nx_; }
+    inline float ny() const { return ny_; }
+    inline float q()  const { return q_; }
+    inline void set(float x, float y, float qq) { nx_ = x; ny_ = y; q_ = qq; }
+  };
+  static constexpr int MAX_PAIRS = 7168;
   Pair pairs_[MAX_PAIRS];
   int  nPairs_ = 0;
 
@@ -436,9 +453,9 @@ private:
       Pair& pr = pairs_[k];
       float rx = px[pr.j] - px[pr.i], ry = py[pr.j] - py[pr.i];
       float r2 = rx * rx + ry * ry;
-      if (r2 < 1e-6f) { pr.q = 1.f; continue; }      // coincident: skip in viscosity
+      if (r2 < 1e-6f) { pr.q_ = 1.f; continue; }       // coincident: skip in viscosity
       float invR = fastInvSqrt(r2);
-      pr.nx = rx * invR; pr.ny = ry * invR; pr.q = r2 * invR * invH;
+      pr.set(rx * invR, ry * invR, r2 * invR * invH);
     }
   }
 
@@ -460,7 +477,7 @@ private:
       Pair& pr = back ? pairs_[MAX_PAIRS - 1 - cnt] : pairs_[cnt];
       cnt++;
       pr.i = (uint16_t)i; pr.j = (uint16_t)j;
-      pr.nx = rx * invR; pr.ny = ry * invR; pr.q = q;
+      pr.set(rx * invR, ry * invR, q);
     });
     if (back) b0_ = MAX_PAIRS - cnt; else nPairs_ = cnt;
   }

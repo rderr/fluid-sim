@@ -48,16 +48,18 @@ silently redirect it, so the buttons use the raw IDF GPIO API.
 ## How it works
 
 - `src/fluid.h` is a Clavet-style particle fluid (double density relaxation
-  with a near-pressure term) on a 22x22 spatial hash. 700 particles, two
+  with a near-pressure term) on a 22x22 spatial hash. 780 particles, two
   fixed 1/120 s substeps per frame (the relaxation scheme is only stable at
-  a fixed step, so a sub-60 fps frame plays slightly slow rather than wobble). Neighbour pairs are found once per substep into a compact
-  list that the viscosity, density and relaxation passes all reuse. Pair
+  a fixed step, so a sub-60 fps frame plays slightly slow rather than wobble). Neighbour pairs are found every other substep (geometry refreshed in
+  between) into a compact list that the viscosity, density and relaxation
+  passes all reuse. Pair
   discovery, density, displacement and geometry refresh are split between
   both cores (a helper task on core 0 takes half the grid rows / pairs), and
   heat diffusion runs on core 0 alongside the viscosity pass.
 - `src/render.h` splats particles into an 8-bit density field and maps it
   through a colour LUT, giving a metaball look with a bright surface rim.
-  It runs on core 0 from a position snapshot, overlapping the physics.
+  It works in 32-row bands to save RAM and runs on core 0 from a position
+  snapshot, overlapping the physics.
 - `src/display.h` is a tiny GC9107 driver streaming the 32 KB framebuffer over
   SPI at 40 MHz with DMA, double-buffered.
 - `src/imu.h` is a register-level QMI8658C driver (I2C on SDA 12 / SCL 11).

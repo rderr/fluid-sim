@@ -26,7 +26,7 @@ constexpr int BTN_ORIENT = 47;
 constexpr int BTN_RESET  = 48;
 constexpr int BTN_THEME  = 0;
 
-constexpr int   PARTICLES   = 700;
+constexpr int   PARTICLES   = 780;
 constexpr int   SUBSTEPS    = 2;             // physics substeps per rendered frame
 constexpr float SUB_DT      = 1.f / 120.f;   // fixed: the relaxation scheme's stability depends
                                              // on dt, so it must not follow the frame rate

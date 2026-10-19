@@ -35,9 +35,11 @@ class Renderer {
 public:
   uint16_t fbs[2][W * H];    // RGB565, byte-swapped for SPI; double-buffered
   uint16_t* fb = fbs[0];     // buffer holding the most recently drawn frame
-  uint8_t  field[W * H];
-  uint8_t  tfield[W * H];    // temperature * kernel weight, accumulated (heat mode);
-                             // fits a byte because each term is <= its weight
+  // The density fields are built one horizontal band at a time to save RAM.
+  static constexpr int BAND = 32;
+  uint8_t  field[BAND * W];
+  uint8_t  tfield[BAND * W];  // temperature * kernel weight (heat mode); fits a
+                              // byte because each term is <= its weight
   // Palette stretch: temperatures from heatLo..heatHi span the full thermal
   // palette (the pool rarely reaches 0 or 1).
   float heatLo = 0.3f, heatHi = 0.85f;
@@ -72,24 +74,29 @@ public:
   // temps may be null (plain density rendering).
   void draw(const float* xs, const float* ys, int n, const float* temps) {
     fb = (fb == fbs[0]) ? fbs[1] : fbs[0];   // draw into the buffer not being sent
-    memset(field, 0, sizeof(field));
-    if (!temps) {
-      for (int i = 0; i < n; ++i) splat(xs[i], ys[i]);
+    for (int y0 = 0; y0 < H; y0 += BAND) {
+      memset(field, 0, sizeof(field));
+      if (temps) memset(tfield, 0, sizeof(tfield));
+      const float lo = y0 - KR - 1.f, hi = y0 + BAND + KR + 1.f;
+      for (int i = 0; i < n; ++i) {
+        float y = ys[i];
+        if (y < lo || y > hi) continue;        // does not touch this band
+        if (temps) splatT(xs[i], y - y0, temps[i]); else splat(xs[i], y - y0);
+      }
       const uint8_t* f = field;
-      uint16_t* o = fb;
-      for (int i = 0; i < W * H; ++i) o[i] = lut_[f[i]];
-      return;
-    }
-    memset(tfield, 0, sizeof(tfield));
-    for (int i = 0; i < n; ++i) splatT(xs[i], ys[i], temps[i]);
-    const uint8_t* f = field; const uint8_t* tf = tfield;
-    uint16_t* o = fb;
-    for (int i = 0; i < W * H; ++i) {
-      int d = f[i];
-      if (d < thrRim_) { o[i] = bg_; continue; }
-      int t = (tf[i] << 8) / d;                  // weighted mean temperature, 0..255
-      if (t > 255) t = 255;
-      o[i] = heatLut_[t];
+      uint16_t* o = fb + y0 * W;
+      if (!temps) {
+        for (int i = 0; i < W * BAND; ++i) o[i] = lut_[f[i]];
+      } else {
+        const uint8_t* tf = tfield;
+        for (int i = 0; i < W * BAND; ++i) {
+          int d = f[i];
+          if (d < thrRim_) { o[i] = bg_; continue; }
+          int t = (tf[i] << 8) / d;            // weighted mean temperature, 0..255
+          if (t > 255) t = 255;
+          o[i] = heatLut_[t];
+        }
+      }
     }
   }
 
@@ -114,14 +121,14 @@ private:
     }
   }
 
-  inline void splatT(float fx, float fy, float temp) {
-    int cx = (int)(fx + 0.5f), cy = (int)(fy + 0.5f);
+  inline void splatT(float fx, float fy, float temp) {   // fy relative to the band
+    int cx = (int)(fx + 0.5f), cy = (int)floorf(fy + 0.5f);
     int x0 = cx - KR, y0 = cy - KR;
     int t8 = (int)((temp - heatLo) / (heatHi - heatLo) * 255.f + 0.5f);
     if (t8 < 0) t8 = 0; if (t8 > 255) t8 = 255;
     for (int ky = 0; ky < KS; ++ky) {
       int y = y0 + ky;
-      if (y < 0 || y >= H) continue;
+      if (y < 0 || y >= BAND) continue;
       uint8_t* row = field + y * W; uint8_t* trow = tfield + y * W;
       const uint8_t* krow = kernel_ + ky * KS;
       for (int kx = 0; kx < KS; ++kx) {
@@ -151,12 +158,12 @@ private:
       }
   }
 
-  inline void splat(float fx, float fy) {
-    int cx = (int)(fx + 0.5f), cy = (int)(fy + 0.5f);
+  inline void splat(float fx, float fy) {       // fy relative to the band
+    int cx = (int)(fx + 0.5f), cy = (int)floorf(fy + 0.5f);
     int x0 = cx - KR, y0 = cy - KR;
     for (int ky = 0; ky < KS; ++ky) {
       int y = y0 + ky;
-      if (y < 0 || y >= H) continue;
+      if (y < 0 || y >= BAND) continue;
       uint8_t* row = field + y * W;
       const uint8_t* krow = kernel_ + ky * KS;
       for (int kx = 0; kx < KS; ++kx) {
