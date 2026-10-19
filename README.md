@@ -135,8 +135,3 @@ Pillow or ImageMagick (`magick /tmp/anim/anim_*.bmp -scale 200% -delay 5 -loop 0
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-## Status
-
-Working and tuned on one board. Things that would be nice: a mode where
-colour follows speed, and a second liquid.
