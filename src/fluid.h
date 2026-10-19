@@ -46,13 +46,13 @@ struct Params {
   //         travel faster; too high and the surface shimmers or boils.
   //   down: squishier, packs down against walls when tilted, waves are
   //         slower and softer; too low and the volume visibly shrinks.
-  float stiffness     = 2500.f;
+  float stiffness     = 3500.f;
 
   // Near-pressure (anti-clustering). Keeps particles from stacking on top
   // of each other; usually kept at ~2x stiffness.
   //   up:   more even spacing, smoother interior, slightly more jitter.
   //   down: particles bunch into dense knots and holes open in the body.
-  float nearStiffness = 5000.f;
+  float nearStiffness = 7000.f;
 
   // Linear viscosity. Thickness: water vs honey.
   //   up:   thicker, settles faster, surface calms quickly, small tilts

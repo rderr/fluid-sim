@@ -26,7 +26,7 @@ constexpr int BTN_ORIENT = 47;
 constexpr int BTN_RESET  = 48;
 constexpr int BTN_THEME  = 0;
 
-constexpr int   PARTICLES   = 640;
+constexpr int   PARTICLES   = 700;
 constexpr int   SUBSTEPS    = 2;             // physics substeps per rendered frame
 constexpr float SUB_DT      = 1.f / 120.f;   // fixed: the relaxation scheme's stability depends
                                              // on dt, so it must not follow the frame rate
@@ -262,8 +262,8 @@ void loop() {
   uint32_t thisFrame = micros() - frameStart; if (thisFrame > maxFrameUs) maxFrameUs = thisFrame;
   uint32_t now = millis();
   if (now - statT >= 2000 && Serial) {      // only when a host is listening
-    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
-                  frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames,
+    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
+                  frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames, sim.pairCount(),
                   maxFrameUs / 1000.f, maxImuUs / 1000.f, maxSimUs / 1000.f, maxSubmitUs / 1000.f,
                   orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f);
     maxFrameUs = maxImuUs = maxSimUs = maxSubmitUs = 0;

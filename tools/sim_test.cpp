@@ -6,6 +6,7 @@
 #include <cmath>
 #include <chrono>
 #include <string>
+#include <algorithm>
 #include "fluid.h"
 #include "render.h"
 
@@ -100,12 +101,14 @@ int main(int argc, char** argv) {
     }
     if (fr % 30 == 0 || fr == frames - 1) {
       // fluid height estimate: fraction of particles in lower half
-      int lower = 0, leftWall = 0;
+      int lower = 0, leftWall = 0; float topY = fluid::H;
+      { float ys[fluid::MAX_P]; for (int i = 0; i < sim.n; ++i) ys[i] = sim.py[i];
+        std::sort(ys, ys + sim.n); topY = ys[sim.n / 20]; }   // 5th percentile = pool top
       for (int i = 0; i < sim.n; ++i) { if (sim.py[i] > fluid::H / 2) lower++; if (sim.px[i] < fluid::WALL + 0.5f) leftWall++; }
       float sumV = 0, tmin = 1, tmax = 0;
       for (int i = 0; i < sim.n; ++i) { sumV += sqrtf(sim.vx[i]*sim.vx[i] + sim.vy[i]*sim.vy[i]); if (sim.temp[i] < tmin) tmin = sim.temp[i]; if (sim.temp[i] > tmax) tmax = sim.temp[i]; }
-      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% leftWall=%3d pairs=%d T=%.2f [%.2f..%.2f]\n",
-             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, leftWall, sim.pairCount(), sim.meanTemp(), tmin, tmax);
+      printf("t=%5.2f g=(%5.2f,%5.2f) meanRho=%.2f maxV=%7.1f meanV=%6.1f lowerHalf=%3d%% leftWall=%3d pairs=%d depth=%3.0fpx T=%.2f [%.2f..%.2f]\n",
+             t, gx, gy, sim.meanDensity(), maxV, sumV / sim.n, lower * 100 / sim.n, leftWall, sim.pairCount(), fluid::H - topY, sim.meanTemp(), tmin, tmax);
       char path[512]; snprintf(path, sizeof path, "%s/frame_%03d.bmp", out, fr);
       writeBmp(path, rend.fb);
     }
