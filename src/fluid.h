@@ -325,22 +325,23 @@ private:
   // Heater on the wall gravity points at, cold sink on the opposite wall,
   // surface cooling where the neighbourhood is sparse, diffusion over pairs.
   void heatStep(float dt, float gx, float gy, float invH) {
-    // signed distance (px) of each particle from the hot wall, along gravity
-    float gm2 = gx * gx + gy * gy;
-    if (gm2 < 1e-4f) gm2 = 1e-4f;
-    float inv = fastInvSqrt(gm2);
-    float ux = gx * inv, uy = gy * inv;             // unit "down"
-    // the hot wall is where (p . u) is maximal: a box corner-aware bound
-    float hotMax = (ux > 0 ? (W - WALL) * ux : WALL * ux) + (uy > 0 ? (H - WALL) * uy : WALL * uy);
-    float coldMin = (ux > 0 ? WALL * ux : (W - WALL) * ux) + (uy > 0 ? WALL * uy : (H - WALL) * uy);
+    // The heater is the whole wall whose outward direction is closest to
+    // gravity (switches at 45 degrees); the cold sink is the opposite wall.
+    // Distances are measured perpendicular to those walls.
+    float ax = gx < 0 ? -gx : gx, ay = gy < 0 ? -gy : gy;
+    bool horizontal = ax > ay;                      // hot wall is left/right
+    float hotEdge, coldEdge;
+    if (horizontal) { hotEdge = gx > 0 ? W - WALL : WALL; coldEdge = gx > 0 ? WALL : W - WALL; }
+    else            { hotEdge = gy > 0 ? H - WALL : WALL; coldEdge = gy > 0 ? WALL : H - WALL; }
     float meanRho = 0; for (int i = 0; i < n; ++i) meanRho += rho_[i];
     meanRho = n ? meanRho / n : 1.f;
     const float surfaceRho = 0.7f * meanRho;        // sparse neighbourhood = exposed surface
     const float bulk = p.coolBulk * dt;
     for (int i = 0; i < n; ++i) {
-      float d = px[i] * ux + py[i] * uy;
-      float qh = (hotMax - d) * invH;             // 0 at the hot wall, 1 at h away
-      float qc = (d - coldMin) * invH;
+      float c = horizontal ? px[i] : py[i];
+      float dh = hotEdge - c, dc = coldEdge - c;
+      float qh = (dh < 0 ? -dh : dh) * invH;      // 0 at the hot wall, 1 at h away
+      float qc = (dc < 0 ? -dc : dc) * invH;
       float T = temp[i];
       if (qh < 1.f) { float a = 1.f - (qh < 0 ? 0 : qh); T += p.heatRate * dt * a * (1.f - T); }
       if (qc < 1.f) { float a = 1.f - (qc < 0 ? 0 : qc); T += p.coolRate * dt * a * (0.f - T); }

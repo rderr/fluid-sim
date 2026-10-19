@@ -62,7 +62,11 @@ int main(int argc, char** argv) {
   sim.p.diffusion     = envf("DIFF", sim.p.diffusion);
   sim.p.buoyancy      = envf("BUOY", sim.p.buoyancy);
   sim.p.coolBulk      = envf("COOLB", sim.p.coolBulk);
-  sim.p.discoverEveryStep = envf("DISC", 0) > 0;  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
+  sim.p.discoverEveryStep = envf("DISC", 0) > 0;
+  int   dumpEvery     = (int)envf("DUMP", 0);     // DUMP=N: write every Nth frame (for animations)
+  float dumpStart     = envf("START", 0);         // ...starting at this many seconds
+  float sway          = envf("SWAY", 0);          // SWAY=A: gentle tilt A*sin(0.6 t) on top of the scenario
+  float seconds       = envf("SECONDS", 10);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
   float fps = envf("FPS", 60.f);            // frame rate the substeps are sized for
   const float dt = 1.f / (fps * substeps);
   render::Theme th;
@@ -72,7 +76,7 @@ int main(int argc, char** argv) {
   rend.setTheme(th);
   printf("particles: %d rho0=%.2f k=%.0f kn=%.0f beta=%.2f\n", sim.n, sim.p.restDensity, sim.p.stiffness, sim.p.nearStiffness, sim.p.viscBeta);
 
-  const int frames = 600;               // 10 s at 60 fps
+  const int frames = (int)(seconds * 60);
   double simTime = 0, renderTime = 0;
   int bad = 0;
   for (int fr = 0; fr < frames; ++fr) {
@@ -80,6 +84,7 @@ int main(int argc, char** argv) {
     float gx = 0, gy = 1;
     float t = fr / 60.f;
     if (slosh)               { gx = (t > 2 && t < 3) ? -0.7f : 0.1f; gy = sqrtf(1.f - gx * gx); }
+    if (sway > 0)            { gx += sway * sinf(0.6f * t); float m = sqrtf(gx * gx + gy * gy); gx /= m; gy /= m; }
     else if (hold)           { gx = tiltG; gy = sqrtf(1.f - tiltG * tiltG); }
     else if (t > 2 && t < 4) { gx = tiltG; gy = sqrtf(1.f - tiltG * tiltG); }
     else if (!hold && !slosh && t > 4 && t < 6) { gx = 0; gy = -1; }
@@ -99,6 +104,10 @@ int main(int argc, char** argv) {
       if (sim.px[i] < 0 || sim.px[i] > fluid::W || sim.py[i] < 0 || sim.py[i] > fluid::H) bad++;
       float v = sqrtf(sim.vx[i] * sim.vx[i] + sim.vy[i] * sim.vy[i]);
       if (v > maxV) maxV = v;
+    }
+    if (dumpEvery > 0 && t >= dumpStart && fr % dumpEvery == 0) {
+      char path[512]; snprintf(path, sizeof path, "%s/anim_%04d.bmp", out, fr);
+      writeBmp(path, rend.fb);
     }
     if (fr % 30 == 0 || fr == frames - 1) {
       // fluid height estimate: fraction of particles in lower half

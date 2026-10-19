@@ -36,8 +36,10 @@ SIGMA=5 BETA=0.6 /tmp/sim_test /tmp/frames 780
 
 Environment overrides: `RHO0 K KN SIGMA BETA GRAV WALLD` for the fluid,
 `HEAT=1 HEATR COOLR COOLB DIFF BUOY` for convection, `SUBSTEPS FPS DISC`
-for the integrator, and scenarios `HOLD=1 TILT=0.15` (steady tilt) or
-`SLOSH=1` (hard tilt then settle). The last argument is the particle count.
+for the integrator, scenarios `HOLD=1 TILT=0.15` (steady tilt) or
+`SLOSH=1` (hard tilt then settle), `SWAY=A` for a gentle rocking tilt, and
+`SECONDS`, `START`, `DUMP=N` to write every Nth frame for animations. The
+last argument is the particle count.
 
 The stats line per half-second is the quickest read:
 

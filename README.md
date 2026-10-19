@@ -1,5 +1,11 @@
 # fluid-sim
 
+<p align="center">
+  <img src="docs/media/heat-convection.gif" width="256" height="256" alt="Heat convection mode: plumes rising from a heated bottom wall while the board sways">
+  <br>
+  <sub>Heat convection mode, rendered by the desktop harness at 2× (<code>HEAT=1 HOLD=1 SWAY=0.25</code>).</sub>
+</p>
+
 A particle fluid that sloshes around a 128×128 display when you tilt or
 shake the board. Runs on the [LOLIN S3 Mini Pro](https://www.wemos.cc/en/latest/s3/s3_mini_pro.html)
 (ESP32-S3, 0.85" TFT, QMI8658C IMU) at 50–60 fps with 780 particles, plus a
@@ -82,6 +88,23 @@ src/imu.h            QMI8658C driver with retry + I2C bus recovery
 tools/sim_test.cpp   desktop harness: scripted tilt/shake, stats, BMP frames
 docs/                hardware, tuning, architecture notes
 ```
+
+## Making the animation
+
+The GIF above comes from the harness, not a camera:
+
+```
+mkdir -p /tmp/anim
+HEAT=1 HOLD=1 TILT=0 SWAY=0.25 SECONDS=18 START=6 DUMP=2 /tmp/sim_test /tmp/anim 780
+```
+
+`DUMP=2` writes every second frame (30 fps) as `anim_NNNN.bmp` from
+`START` seconds onward; `SWAY` adds a gentle rocking tilt. Assemble the
+frames with Pillow or ImageMagick (`magick /tmp/anim/anim_*.bmp -scale 200% -delay 3.3 -loop 0 out.gif`).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
 
 ## Status
 
