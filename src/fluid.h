@@ -91,6 +91,16 @@ struct Params {
   // step; it should rarely be reached. Lower only if shakes look wrong.
   float maxSpeed      = 0.9f * CELL * 60.f;
 
+  // Spin response. When the board rotates about the screen normal the
+  // fluid, in the board's frame, feels the Euler force (lag when the spin
+  // starts or stops: this is the swirl), the centrifugal force (pushes
+  // outward into the walls while spinning) and the Coriolis force (curves
+  // the flow). All three are scaled by this gain; 0 turns them off.
+  //   up:   a flick of the wrist sends the pool around the box, steady
+  //         spinning plasters it against the walls.
+  //   down: only fast spins have a visible effect.
+  float spinGain      = 1.0f;
+
   // ---- Heat convection (only used when heat is enabled) ----------------
   // Temperatures run 0 (cold) to 1 (heater). The wall that gravity points
   // at is the heater, the opposite wall is the cold sink, and the free
@@ -175,7 +185,9 @@ public:
 
   // One simulation step. (gx, gy) is the effective gravity in g units
   // (screen coordinates: +x right, +y down).
-  void step(float dt, float gx, float gy) {
+  // omega: board spin rate about the screen normal (rad/s, positive =
+  // clockwise on screen); alpha: its rate of change (rad/s^2).
+  void step(float dt, float gx, float gy, float omega = 0.f, float alpha = 0.f) {
     const float h = RADIUS;
     uint32_t t0 = clock ? clock() : 0, t1;
     auto lap = [&](int slot) { if (clock) { t1 = clock(); prof[slot] += t1 - t0; t0 = t1; } };
@@ -191,6 +203,18 @@ public:
       }
     } else {
       for (int i = 0; i < n; ++i) { vx[i] += ax; vy[i] += ay; }
+    }
+    // 1b. fictitious forces from the board spinning about the screen normal,
+    //     taken about the box centre: centrifugal w^2 r, Euler -alpha x r,
+    //     Coriolis -2 w x v (screen frame: x right, y down, z into screen)
+    if (p.spinGain > 0.f && (omega != 0.f || alpha != 0.f)) {
+      const float g = p.spinGain * dt, w2 = omega * omega, cx = W * 0.5f, cy = H * 0.5f;
+      for (int i = 0; i < n; ++i) {
+        float rx = px[i] - cx, ry = py[i] - cy;
+        float fx = w2 * rx + alpha * ry + 2.f * omega * vy[i];
+        float fy = w2 * ry - alpha * rx - 2.f * omega * vx[i];
+        vx[i] += fx * g; vy[i] += fy * g;
+      }
     }
 
     // 2. viscosity impulses, using the pair list found in the previous step

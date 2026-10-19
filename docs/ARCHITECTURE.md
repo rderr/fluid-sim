@@ -24,7 +24,10 @@ queueing the next, so the two framebuffers alternate safely.
 Clavet, Beaudoin & Poulin 2005, *Particle-based viscoelastic fluid
 simulation*, in 2D with pixel units:
 
-1. Gravity (per particle, scaled by buoyancy in heat mode).
+1. Gravity (per particle, scaled by buoyancy in heat mode), plus the
+   fictitious forces of the board's spin about the screen normal, taken
+   about the box centre: centrifugal ω²r, Euler −α×r, Coriolis −2ω×v.
+   ω comes from the gyro's z axis, α from its filtered derivative.
 2. Viscosity impulses over the neighbour list (sequential, in place).
 3. Clamp speed, save positions, advect.
 4. Neighbour discovery on a 22×22 grid (cell = interaction radius) using a

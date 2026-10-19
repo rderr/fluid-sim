@@ -16,7 +16,8 @@ the pool.
   self-contained header you can also run on your desktop.
 - Gravity comes straight from the accelerometer: tilting *and* shaking move
   the liquid the right way, because the effective gravity in the board's
-  frame is minus the measured acceleration.
+  frame is minus the measured acceleration. The gyro adds the spin: twist
+  the board and the pool swirls (Euler, centrifugal and Coriolis terms).
 - Hand-written drivers for the GC9107 panel (DMA, double-buffered) and the
   QMI8658C IMU. No display library to configure.
 - Physics on core 1, rendering on core 0, with the heaviest solver passes
@@ -52,7 +53,7 @@ USB stack can't be reset into the bootloader by esptool. After that, plain
 |---|---|---|
 | IO0 (BOOT) | Next mode: water, lava, slime, mercury, heat convection | |
 | IO47 | Next IMU-to-screen mapping (if the liquid falls the wrong way) | |
-| IO48 | Respawn the fluid | Calibrate "level" (board flat on a table) |
+| IO48 | Respawn the fluid | Calibrate level and gyro zero (board flat and still on a table) |
 
 Over the serial port, `m` cycles the mode and `p` toggles per-phase timing
 output.
@@ -138,5 +139,4 @@ MIT, see [LICENSE](LICENSE).
 ## Status
 
 Working and tuned on one board. Things that would be nice: a mode where
-colour follows speed, a second liquid, and a gyro term so spinning the board
-swirls the pool.
+colour follows speed, and a second liquid.

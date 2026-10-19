@@ -9,8 +9,8 @@
 //   IO47  cycle the accelerometer-to-screen axis mapping (saved to flash).
 //         If the water runs "uphill", press until it falls the right way.
 //   IO48  short press: respawn the fluid.
-//         hold 1.5 s with the board lying flat on a level surface: calibrate
-//         the accelerometer's x/y bias (saved to flash), fixing "level".
+//         hold 1.5 s with the board lying flat and still on a level surface:
+//         calibrate the accelerometer x/y and gyro z bias (saved to flash).
 //   IO0   cycle mode: water, lava, slime, mercury themes, then heat
 //         convection (heater on whichever wall gravity points at).
 // Serial: 'm' = same as IO0, 'p' = toggle per-phase profiling output.
@@ -89,6 +89,11 @@ static int   orientation = 2;       // 0..7: 4 rotations (0-3) x mirror (4-7); 2
 static int   theme = 0;
 static float fAx = 0.f, fAy = 0.f;  // filtered chip-frame accel (g)
 static float biasX = 0.f, biasY = 0.f; // accel bias (chip frame, g), subtracted
+static float biasW = 0.f;              // gyro z bias (deg/s), subtracted
+static float rawW  = 0.f;              // bias-corrected gyro z (deg/s), kept for calibration
+static float fW = 0.f, fAlpha = 0.f;   // filtered spin rate (rad/s) and its derivative (rad/s^2)
+constexpr float GYRO_ALPHA  = 0.5f;    // gyro low-pass (per frame)
+constexpr float ALPHA_ALPHA = 0.3f;    // angular-acceleration low-pass (per frame)
 
 using render::THEMES;
 using render::THEME_COUNT;
@@ -161,6 +166,7 @@ void setup() {
   orientation = prefs.getInt("orientation2", 2) & 7;
   biasX = prefs.getFloat("biasX", 0.f);
   biasY = prefs.getFloat("biasY", 0.f);
+  biasW = prefs.getFloat("biasW", 0.f);
   theme       = prefs.getInt("theme", 0) % MODE_COUNT;
 
   display::begin();
@@ -206,8 +212,9 @@ void loop() {
   if (btnReset.heldFor(1500)) {
     // Board is assumed flat on a level surface: x/y should read zero.
     biasX = fAx + biasX; biasY = fAy + biasY;   // fAx/fAy are already bias-corrected
-    prefs.putFloat("biasX", biasX); prefs.putFloat("biasY", biasY);
-    Serial.printf("calibrated: bias x=%+.3f y=%+.3f g\n", biasX, biasY);
+    biasW = rawW + biasW;                       // board is still: gyro should read zero
+    prefs.putFloat("biasX", biasX); prefs.putFloat("biasY", biasY); prefs.putFloat("biasW", biasW);
+    Serial.printf("calibrated: bias x=%+.3f y=%+.3f g, gyro z %+.2f dps\n", biasX, biasY, biasW);
     sim.reset(PARTICLES);
   }
   // 'm' on the serial port does the same as the mode button (handy for testing)
@@ -238,14 +245,22 @@ void loop() {
     gx = -sx; gy = -sy;                       // effective gravity = -proper acceleration
     float m = sqrtf(gx * gx + gy * gy);
     if (m > ACCEL_MAX) { gx *= ACCEL_MAX / m; gy *= ACCEL_MAX / m; }
+    // spin about the screen normal: chip z is the screen normal; mirrored
+    // mappings (4-7) flip the handedness, so the sign flips with them
+    rawW = wz - biasW;
+    float w = rawW * (3.14159265f / 180.f) * ((orientation & 4) ? -1.f : 1.f);
+    float prevW = fW;
+    fW += (w - fW) * GYRO_ALPHA;
+    fAlpha += ((fW - prevW) * 60.f - fAlpha) * ALPHA_ALPHA;   // per-frame derivative at ~60 fps
   } else {
+    fW = fAlpha = 0.f;
     float t = millis() * 0.001f;              // demo: slowly rotating gravity
     gx = sinf(t * 0.7f); gy = cosf(t * 0.7f);
   }
 
   // --- simulate + draw ---------------------------------------------------
   uint32_t t0 = micros();
-  for (int s = 0; s < SUBSTEPS; ++s) sim.step(SUB_DT, gx, gy);
+  for (int s = 0; s < SUBSTEPS; ++s) sim.step(SUB_DT, gx, gy, fW, fAlpha);
   uint32_t thisSim = micros() - t0; simUs += thisSim; if (thisSim > maxSimUs) maxSimUs = thisSim;
   uint32_t subT0 = micros();
   submitFrame();                            // hands the frame to core 0
@@ -256,10 +271,10 @@ void loop() {
   uint32_t thisFrame = micros() - frameStart; if (thisFrame > maxFrameUs) maxFrameUs = thisFrame;
   uint32_t now = millis();
   if (now - statT >= 2000 && Serial) {      // only when a host is listening
-    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)\n",
+    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)  spin %+.2f rad/s\n",
                   frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames, sim.pairCount(),
                   maxFrameUs / 1000.f, maxImuUs / 1000.f, maxSimUs / 1000.f, maxSubmitUs / 1000.f,
-                  orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f);
+                  orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f, fW);
     maxFrameUs = maxImuUs = maxSimUs = maxSubmitUs = 0;
     if (profiling) {
     Serial.printf("   per frame: grid %.1f pairs %.1f dens %.1f disp %.1f visc %.1f heat %.1f rest %.1f ms, pairs %d\n",

@@ -18,6 +18,7 @@ The parameters map onto everyday descriptions:
 | "feels like a thimble" / "feels like a big tank" | `gravity` | down / up |
 | "it twitches when my hand shakes" | `ACCEL_ALPHA` (main.cpp) | down |
 | "a film sticks to the wall" | `wallDensity` | up |
+| "twisting the board should swirl it more / less" | `spinGain` | up / down |
 | "surface shimmers when still" | `viscSigma` up, or `stiffness` down | |
 | "droplets are too big" | `RADIUS`, particle count | down, up |
 | "edges too blobby" | `KR`, `thrBody` (render.h) | down |
@@ -36,7 +37,8 @@ SIGMA=5 BETA=0.6 /tmp/sim_test /tmp/frames 780
 
 Environment overrides: `RHO0 K KN SIGMA BETA GRAV WALLD` for the fluid,
 `HEAT=1 HEATR COOLR COOLB DIFF BUOY` for convection, `SUBSTEPS FPS DISC`
-for the integrator, scenarios `HOLD=1 TILT=0.15` (steady tilt) or
+for the integrator, `SPIN=deg/s SPING=gain` for a scripted spin (ramps up
+at 2 s, holds, stops at 5 s), scenarios `HOLD=1 TILT=0.15` (steady tilt) or
 `SLOSH=1` (hard tilt then settle), `SWAY=A` for a gentle rocking tilt, and
 `SECONDS`, `START`, `DUMP=N` to write every Nth frame for animations. The
 last argument is the particle count.
