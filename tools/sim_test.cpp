@@ -74,7 +74,8 @@ int main(int argc, char** argv) {
   float sway          = envf("SWAY", 0);          // SWAY=A: gentle tilt A*sin(0.6 t) on top of the scenario
   float seconds       = envf("SECONDS", 10);
   float spinRate      = envf("SPIN", 0);          // SPIN=deg/s: spin up over 1 s at t=2, hold, stop at t=5
-  sim.p.spinGain      = envf("SPING", sim.p.spinGain);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
+  sim.p.spinGain      = envf("SPING", sim.p.spinGain);
+  sim.p.wallFriction  = envf("WALLF", sim.p.wallFriction);  // SLOSH=1: hard tilt left 2-3 s, then slight right tilt
   float fps = envf("FPS", 60.f);            // frame rate the substeps are sized for
   const float dt = 1.f / (fps * substeps);
   int themeIdx = (int)envf("THEME", 0);           // THEME=0..3: water, lava, slime, mercury
@@ -100,13 +101,20 @@ int main(int argc, char** argv) {
     else if (!hold && !slosh && t > 4 && t < 6) { gx = 0; gy = -1; }
     else if (!hold && !slosh && t > 6 && t < 8) { gx = 3.f * sinf(t * 40.f); gy = 1; }
 
-    // scripted spin: ramps give a finite angular acceleration
+    // scripted spin: ramps give a finite angular acceleration. The board's
+    // rotation also turns the gravity vector in the board frame (a twist
+    // clockwise on screen makes "down" rotate counterclockwise).
+    static float theta = 0;
     float omega = 0, alpha = 0;
     if (spinRate != 0) {
       float w = spinRate * 3.14159265f / 180.f;
       if (t > 2 && t < 3)      { omega = w * (t - 2);  alpha = w; }
       else if (t >= 3 && t < 5){ omega = w; }
       else if (t >= 5 && t < 5.5f) { omega = w * (1 - (t - 5) * 2); alpha = -2 * w; }
+      theta -= omega / 60.f;
+      float c = cosf(theta), sn = sinf(theta);
+      float rx = c * gx - sn * gy, ry = sn * gx + c * gy;
+      gx = rx; gy = ry;
     }
     auto t0 = std::chrono::steady_clock::now();
     for (int k = 0; k < substeps; ++k) sim.step(dt, gx, gy, omega, alpha);

@@ -83,6 +83,14 @@ struct Params {
   // frame; particles move well under a pixel per substep so little is missed.
   bool discoverEveryStep = false;
 
+  // Wall friction (no-slip), 1/s. Damps the velocity component along the
+  // wall for particles within one radius of it, strongest at the wall.
+  //   up:   the wall drags the liquid with it: twisting the board carries
+  //         the pool up the side before it flows back; sloshes die faster
+  //         near walls.
+  //   down: free-slip walls; the pool stays put while the box turns around it.
+  float wallFriction  = WALL_FRICTION;
+
   // Fraction of the neighbor-pair work handed to the second-core helper
   // (0..1). Lower it when that core is also busy rendering.
   float helperShare   = HELPER_SHARE;
@@ -392,6 +400,33 @@ public:
       }
       vx[i] = (px[i] - ox_[i]) * invDt;
       vy[i] = (py[i] - oy_[i]) * invDt;
+    }
+
+    // 6b. wall friction: damp the along-wall velocity near walls
+    if (p.wallFriction > 0.f) {
+      const float invHf = 1.0f / h, fdt = p.wallFriction * dt;
+      for (int i = 0; i < n; ++i) {
+        if (CIRCLE) {
+          float dx = px[i] - CX, dy = py[i] - CY;
+          float r2 = dx * dx + dy * dy;
+          if (r2 < 1e-6f) continue;
+          float invR = fastInvSqrt(r2);
+          float a = 1.f - (CR - r2 * invR) * invHf;        // 1 at the rim, 0 one radius in
+          if (a <= 0.f) continue;
+          float tx = -dy * invR, ty = dx * invR;            // tangent
+          float vt = vx[i] * tx + vy[i] * ty;
+          float k = fdt * a; if (k > 1.f) k = 1.f;
+          vx[i] -= tx * vt * k; vy[i] -= ty * vt * k;
+        } else {
+          float ax = px[i] - WALL, bx = W - WALL - px[i];
+          float ay = py[i] - WALL, by = H - WALL - py[i];
+          float dxw = ax < bx ? ax : bx, dyw = ay < by ? ay : by;
+          float a = 1.f - dxw * invHf;                      // near a side wall: damp vy
+          if (a > 0.f) { float k = fdt * a; if (k > 1.f) k = 1.f; vy[i] -= vy[i] * k; }
+          a = 1.f - dyw * invHf;                            // near top/bottom: damp vx
+          if (a > 0.f) { float k = fdt * a; if (k > 1.f) k = 1.f; vx[i] -= vx[i] * k; }
+        }
+      }
     }
 
     // 7. refresh pair geometry from the final positions so the next step's

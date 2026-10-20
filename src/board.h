@@ -26,6 +26,7 @@
 #define RENDER_BAND       20         // sim rows per band (40 display rows); must divide FLUID_H
 #define DEFAULT_ORIENTATION 1        // verified on hardware (gravity on chip -x when upright)
 #define HELPER_SHARE      0.3f       // core 0 also renders 4x the pixels here, so it takes less solver work
+#define WALL_FRICTION     20.f       // no-slip rim: a twist of the board drags the pool with it
 
 #define PIN_TFT_SCK       10
 #define PIN_TFT_MOSI      11
@@ -58,6 +59,7 @@
 #define RENDER_BAND       32
 #define DEFAULT_ORIENTATION 2        // verified on hardware
 #define HELPER_SHARE      0.5f       // fraction of pair work the core-0 helper takes
+#define WALL_FRICTION     0.f        // free-slip walls (the corners already make twists visible)
 
 #define PIN_TFT_SCK       40
 #define PIN_TFT_MOSI      38

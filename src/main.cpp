@@ -188,6 +188,7 @@ void setup() {
 #endif
   sim.p.displayMm = DISPLAY_MM;
   sim.p.helperShare = HELPER_SHARE;
+  sim.p.wallFriction = WALL_FRICTION;
 
   prefs.begin("fluid", false);
   orientation = prefs.getInt("orientation2", DEFAULT_ORIENTATION) & 7;
