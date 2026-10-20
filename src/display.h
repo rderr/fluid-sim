@@ -14,7 +14,7 @@
 namespace display {
 
 constexpr int W = DISPLAY_W, H = DISPLAY_H;
-constexpr int SPI_HZ = 40000000;
+constexpr int SPI_HZ = DISPLAY_SPI_HZ;
 
 static spi_device_handle_t dev_ = nullptr;
 static spi_transaction_t   tx_;

@@ -22,7 +22,9 @@
 #define DISPLAY_COL_OFFSET 0
 #define DISPLAY_ROW_OFFSET 0
 #define DISPLAY_MADCTL    0x08       // BGR, no rotation
+#define DISPLAY_SPI_HZ    80000000   // GC9A01 takes 80 MHz; the 115 KB frame needs it
 #define RENDER_BAND       20         // sim rows per band (40 display rows); must divide FLUID_H
+#define DEFAULT_ORIENTATION 6        // IMU z points toward the viewer here: mirrored mapping
 
 #define PIN_TFT_SCK       10
 #define PIN_TFT_MOSI      11
@@ -51,7 +53,9 @@
 #define DISPLAY_COL_OFFSET 2
 #define DISPLAY_ROW_OFFSET 1
 #define DISPLAY_MADCTL    0x08
+#define DISPLAY_SPI_HZ    40000000
 #define RENDER_BAND       32
+#define DEFAULT_ORIENTATION 2        // verified on hardware
 
 #define PIN_TFT_SCK       40
 #define PIN_TFT_MOSI      38

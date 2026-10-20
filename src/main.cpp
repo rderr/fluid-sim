@@ -91,7 +91,7 @@ static void submitFrame() {
 
 static bool  imuOk = false;
 static bool  profiling = false;     // 'p' on serial toggles per-phase timing output
-static int   orientation = 2;       // 0..7: 4 rotations (0-3) x mirror (4-7); 2 matches the board
+static int   orientation = DEFAULT_ORIENTATION;   // 0..7: 4 rotations (0-3) x mirror (4-7)
 static int   theme = 0;
 static float fAx = 0.f, fAy = 0.f;  // filtered chip-frame accel (g)
 static float biasX = 0.f, biasY = 0.f; // accel bias (chip frame, g), subtracted
@@ -186,7 +186,7 @@ void setup() {
   sim.p.displayMm = DISPLAY_MM;
 
   prefs.begin("fluid", false);
-  orientation = prefs.getInt("orientation2", 2) & 7;
+  orientation = prefs.getInt("orientation2", DEFAULT_ORIENTATION) & 7;
   biasX = prefs.getFloat("biasX", 0.f);
   biasY = prefs.getFloat("biasY", 0.f);
   biasW = prefs.getFloat("biasW", 0.f);
