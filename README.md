@@ -115,6 +115,15 @@ docs/                hardware, tuning, architecture notes
 Same physics, different palettes; the mode button cycles through them and
 then into heat convection.
 
+On the round board the tank is a circle and the walls are no-slip, so a
+twist of the board drags the pool around the rim:
+
+<p align="center">
+  <img src="docs/media/round-twist.gif" width="240" height="240" alt="Round tank: the board twists and the rim drags the pool around">
+  <br>
+  <sub>Waveshare 1.28" configuration, 240×240, rendered by the harness (<code>SPIN=60</code>).</sub>
+</p>
+
 ## Making the animations
 
 All GIFs come from the harness, not a camera. Each run writes every Nth
@@ -125,11 +134,14 @@ mkdir -p /tmp/anim
 HEAT=1 HOLD=1 TILT=0 SWAY=0.25 SECONDS=18 START=6 DUMP=3 /tmp/sim_test /tmp/anim 780   # heat
 THEME=1 SLOSH=1 SECONDS=8 START=1.5 DUMP=3 /tmp/sim_test /tmp/anim 780                # lava
 THEME=2 HOLD=1 TILT=0 SWAY=0.6 SECONDS=10 START=2 DUMP=3 /tmp/sim_test /tmp/anim 780  # slime
+HOLD=1 TILT=0 SPIN=60 SECONDS=10 START=1 DUMP=3 /tmp/sim_ws /tmp/anim 700             # round board twist
 ```
 
 `THEME` is 0–3 (water, lava, slime, mercury), `SWAY` adds a rocking tilt,
-`SLOSH` is a hard tilt then settle, and with no scenario flag the run is
-the default tilt, flip, shake, settle sequence. Assemble the frames with
+`SLOSH` is a hard tilt then settle, `SPIN` twists the board (deg/s), and
+with no scenario flag the run is the default tilt, flip, shake, settle
+sequence. Build the harness with `-DBOARD_WAVESHARE_LCD_128` for the round
+board (`/tmp/sim_ws` above). Assemble the frames with
 Pillow or ImageMagick (`magick /tmp/anim/anim_*.bmp -scale 200% -delay 5 -loop 0 out.gif`).
 
 ## Acknowledgements
