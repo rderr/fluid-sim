@@ -144,7 +144,7 @@ LOLIN, which freed 48 KB there.
 gives it a 1 KB TX buffer and only prints stats when there is room, since a
 UART write that waits for the FIFO would stall the frame loop.
 
-**IMU orientation.** The chip's mounting is not known for this board; the
+**IMU orientation.** The chip is mounted mirror-image to the LOLIN (+z toward the viewer, gravity on -x when upright); the
 default mapping is the LOLIN's (2). If the liquid falls the wrong way, hold
 BOOT for 4 s (or send `o` on serial) to step through the eight mappings;
 the choice is saved to flash.
