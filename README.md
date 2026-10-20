@@ -47,7 +47,7 @@ extension or `pip install platformio` both work).
 git clone https://github.com/rderr/fluid-sim.git
 cd fluid-sim
 pio run -t upload                              # LOLIN S3 Mini Pro (default)
-pio run -e waveshare_s3_lcd_1_28 -t upload     # Waveshare 1.28" round
+pio run -e waveshare_s3_lcd_1_28 -t upload     # Waveshare 1.28" round (see docs/HARDWARE.md if on macOS)
 pio device monitor                             # optional: stats, button events, calibration output
 ```
 

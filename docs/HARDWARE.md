@@ -109,7 +109,8 @@ bridge** (not native USB).
 
 Sources: the [Waveshare wiki](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28)
 and TFT_eSPI's `Setup302_Waveshare_ESP32S3_GC9A01.h`, which agree on every
-pin below. Not yet verified on hardware by this project.
+pin below. Verified on hardware: 60 fps in the liquid modes, ~50 fps in heat
+mode, with 524 particles.
 
 | Function | GPIO | Notes |
 |---|---|---|
@@ -143,6 +144,32 @@ LOLIN, which freed 48 KB there.
 **Serial.** With the UART bridge, `Serial` is `HardwareSerial`; the firmware
 gives it a 1 KB TX buffer and only prints stats when there is room, since a
 UART write that waits for the FIFO would stall the frame loop.
+
+**Flashing on macOS.** Without WCH's CH34x driver approved in System
+Settings, macOS drives the CH343 with its generic CDC driver, which does not
+throttle the host: esptool's bulk writes overflow the bridge and fail with
+"Failed to write to target RAM" at any baud rate, with or without the stub.
+`tools/flash_small_packets.py` paces every serial write to the UART rate and
+flashes reliably at 115200 (about 25 s for the app image). It takes esptool's
+normal arguments:
+
+```
+B=.pio/build/waveshare_s3_lcd_1_28
+~/.platformio/penv/bin/python tools/flash_small_packets.py \
+  --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 115200 \
+  --before default_reset --after hard_reset write_flash --flash_mode keep --flash_freq keep --flash_size keep \
+  0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
+  0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+  0x10000 $B/firmware.bin
+```
+
+Once the WCH driver is approved, plain `pio run -e waveshare_s3_lcd_1_28 -t upload`
+should work and the MAC guard applies.
+
+**Core balance.** This board renders four times the pixels of the LOLIN, so
+`HELPER_SHARE` in `board.h` hands core 0 only 30% of the solver's pair work
+(50% on the LOLIN). Rows no splat touched are filled with background instead
+of being upsampled, which is most of the screen for a half-full tank.
 
 **IMU orientation.** The chip reads gravity on its -x axis when the board is upright (its +z reads toward the viewer, yet the non-mirrored mapping 1 is the one that matches on hardware); the
 default mapping is the LOLIN's (2). If the liquid falls the wrong way, hold

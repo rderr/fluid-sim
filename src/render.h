@@ -66,6 +66,7 @@ public:
   uint8_t  field[(BAND + 1) * W];
   uint8_t  tfield[(BAND + 1) * W];   // temperature * kernel weight (heat mode);
                                      // fits a byte because each term is <= its weight
+  uint8_t  touched[BAND + 1];        // field rows any splat wrote to; the rest are background
   // Palette stretch: temperatures from heatLo..heatHi span the full thermal
   // palette (the pool rarely reaches 0 or 1).
   float heatLo = 0.3f, heatHi = 0.85f;
@@ -112,6 +113,7 @@ public:
       uint32_t t0 = clock ? clock() : 0;
       memset(field, 0, sizeof(field));
       if (temps) memset(tfield, 0, sizeof(tfield));
+      memset(touched, 0, sizeof(touched));
       const float lo = y0 - KR - 1.f, hi = y0 + BAND + KR + 2.f;
       for (int i = 0; i < n; ++i) {
         float y = ys[i];
@@ -122,10 +124,12 @@ public:
       uint16_t* out = bands[which];
       which ^= 1;
       if (SCALE == 1) {
-        if (!temps) {
-          for (int i = 0; i < W * BAND; ++i) out[i] = lut_[field[i]];
-        } else {
-          for (int i = 0; i < W * BAND; ++i) out[i] = heatPixel(field[i], tfield[i]);
+        for (int y = 0; y < BAND; ++y) {
+          uint16_t* o = out + y * W;
+          if (!touched[y]) { fillBg(o, W); continue; }
+          const uint8_t* f = field + y * W; const uint8_t* tf = tfield + y * W;
+          if (!temps) for (int x = 0; x < W; ++x) o[x] = lut_[f[x]];
+          else        for (int x = 0; x < W; ++x) o[x] = heatPixel(f[x], tf[x]);
         }
       } else {
         upsample(out, temps != nullptr);
@@ -145,6 +149,14 @@ private:
   static inline uint8_t lerp(uint8_t a, uint8_t b, float f) {
     return (uint8_t)(a + (b - a) * f + 0.5f);
   }
+
+  static inline void fillBg16(uint16_t* o, int n, uint16_t v) {
+    uint32_t vv = ((uint32_t)v << 16) | v;
+    uint32_t* o32 = (uint32_t*)o;
+    for (int i = 0; i < n / 2; ++i) o32[i] = vv;
+    if (n & 1) o[n - 1] = v;
+  }
+  inline void fillBg(uint16_t* o, int n) const { fillBg16(o, n, bg_); }
 
   inline uint16_t heatPixel(int d, int tf) const {
     if (d < thrRim_) return bg_;
@@ -192,10 +204,11 @@ private:
       int far = (oy & 1) ? k + 1 : k - 1;
       if (far < 0) far = 0;
       if (far > BAND) far = BAND;              // the band carries one extra row
+      uint16_t* o = out + oy * OUT_W;
+      if (!touched[k] && !touched[far]) { fillBg(o, OUT_W); continue; }
       const uint8_t *tn = nullptr, *tf = nullptr;
       const uint8_t* n = hrow(k, heat, heat ? &tn : nullptr);
       const uint8_t* f = hrow(far, heat, heat ? &tf : nullptr);
-      uint16_t* o = out + oy * OUT_W;
       if (!heat) {
         for (int ox = 0; ox < OUT_W; ++ox) o[ox] = lut_[(3 * n[ox] + f[ox] + 2) >> 2];
       } else {
@@ -239,6 +252,7 @@ private:
     for (int ky = 0; ky < KS; ++ky) {
       int y = y0 + ky;
       if (y < 0 || y > BAND) continue;        // band rows plus the extra row
+      touched[y] = 1;
       uint8_t* row = field + y * W;
       const uint8_t* krow = kernel_ + ky * KS;
       for (int kx = 0; kx < KS; ++kx) {
@@ -258,6 +272,7 @@ private:
     for (int ky = 0; ky < KS; ++ky) {
       int y = y0 + ky;
       if (y < 0 || y > BAND) continue;
+      touched[y] = 1;
       uint8_t* row = field + y * W; uint8_t* trow = tfield + y * W;
       const uint8_t* krow = kernel_ + ky * KS;
       for (int kx = 0; kx < KS; ++kx) {
