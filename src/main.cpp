@@ -48,8 +48,11 @@ static bool  snapHeat = false;
 static SemaphoreHandle_t renderGo, renderDone;
 static uint32_t drawUsAcc = 0;
 
+static uint32_t pushUsAcc = 0, bandsAcc = 0;
 static void bandSink(int y0, int rows, const uint16_t* buf, void*) {
+  uint32_t t0 = micros();
   display::pushBand(y0, rows, buf);       // waits for the previous band's DMA, queues this one
+  pushUsAcc += micros() - t0; bandsAcc++;
 }
 
 static void renderTask(void*) {
@@ -184,6 +187,7 @@ void setup() {
   buttonInit(BTN_RESET);
 #endif
   sim.p.displayMm = DISPLAY_MM;
+  sim.p.helperShare = HELPER_SHARE;
 
   prefs.begin("fluid", false);
   orientation = prefs.getInt("orientation2", DEFAULT_ORIENTATION) & 7;
@@ -206,6 +210,7 @@ void setup() {
   xTaskCreatePinnedToCore(helperTask, "simhelper", 4096, nullptr, 3, nullptr, 0);
   sim.helper = { helperStart, helperWait, nullptr };
   sim.clock = []() -> uint32_t { return (uint32_t)micros(); };
+  rend.clock = sim.clock;
   submitFrame();
   delay(50);
   display::setBacklight(true);
@@ -313,9 +318,11 @@ void loop() {
   bool canPrint = Serial.availableForWrite() > 400;   // never block on a full UART buffer
 #endif
   if (now - statT >= 2000 && canPrint) {
-    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms (dma wait %.1f)  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)  spin %+.2f rad/s\n",
+    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms (push %.1f, dma wait %.1f, splat %.1f, up %.1f, helper cpu %.1f)  mode %d  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)  spin %+.2f rad/s\n",
                   frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames,
-                  display::takeWaitUs() / 1000.f / frames, sim.pairCount(),
+                  pushUsAcc / 1000.f / frames, display::takeWaitUs() / 1000.f / frames,
+                  rend.splatUs / 1000.f / frames, rend.upUs / 1000.f / frames,
+                  (helperUs[0] + helperUs[1] + helperUs[2] + helperUs[3] + helperUs[4]) / 1000.f / frames, theme, sim.pairCount(),
                   maxFrameUs / 1000.f, maxImuUs / 1000.f, maxSimUs / 1000.f, maxSubmitUs / 1000.f,
                   orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f, fW);
     maxFrameUs = maxImuUs = maxSimUs = maxSubmitUs = 0;
@@ -330,9 +337,10 @@ void loop() {
                   helperUs[0] / 1000.f / frames, helperUs[3] / 1000.f / frames, helperUs[4] / 1000.f / frames, sim.rowMid_);
     }
     for (int i = 0; i < 5; ++i) helperUs[i] = 0;
+    (void)0;
     for (int i = 0; i < 7; ++i) sim.prof[i] = 0;
     sim.profOwn[0] = sim.profOwn[1] = sim.profWait[0] = sim.profWait[1] = 0;
-    statT = now; frames = 0; simUs = 0; drawUsAcc = 0;
+    statT = now; frames = 0; simUs = 0; drawUsAcc = 0; pushUsAcc = 0; rend.splatUs = rend.upUs = 0;
   }
 
   // Pace to ~60 fps so the physics timestep stays honest.

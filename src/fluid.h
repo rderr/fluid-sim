@@ -83,6 +83,10 @@ struct Params {
   // frame; particles move well under a pixel per substep so little is missed.
   bool discoverEveryStep = false;
 
+  // Fraction of the neighbor-pair work handed to the second-core helper
+  // (0..1). Lower it when that core is also busy rendering.
+  float helperShare   = HELPER_SHARE;
+
   // Wall ghost density. The wall counts as a layer of neighbors so particles
   // touching it feel normal pressure instead of the negative (cohesive)
   // pressure that makes a film cling to the wall.
@@ -585,9 +589,10 @@ private:
       total += work[r];
     }
     uint32_t acc = 0; rowMid_ = GH / 2;
+    const uint32_t mainTarget = (uint32_t)(total * (1.f - p.helperShare));
     for (int r = 0; r < GH; ++r) {
       acc += work[r];
-      if (acc * 2 >= total) { rowMid_ = r + 1; break; }
+      if (acc >= mainTarget) { rowMid_ = r + 1; break; }
     }
     if (rowMid_ >= GH) rowMid_ = GH - 1;
     if (rowMid_ < 1) rowMid_ = 1;

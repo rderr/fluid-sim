@@ -69,8 +69,14 @@ public:
   // Palette stretch: temperatures from heatLo..heatHi span the full thermal
   // palette (the pool rarely reaches 0 or 1).
   float heatLo = 0.3f, heatHi = 0.85f;
+  // Optional profiling: microsecond clock and accumulators (set clock to use).
+  uint32_t (*clock)() = nullptr;
+  uint32_t splatUs = 0, upUs = 0;
 
-  Renderer() { setTheme(Theme()); buildKernel(); buildHeatLut(); }
+  Renderer() {
+    setTheme(Theme()); buildKernel(); buildHeatLut();
+    inv_[0] = 0; for (int d = 1; d < 256; ++d) inv_[d] = 65536u / d;
+  }
 
   void setTheme(const Theme& t) {
     thrRim_ = t.thrRim;
@@ -103,6 +109,7 @@ public:
   void draw(const float* xs, const float* ys, int n, const float* temps, BandSink sink, void* ctx) {
     int which = 0;
     for (int y0 = 0; y0 < H; y0 += BAND) {
+      uint32_t t0 = clock ? clock() : 0;
       memset(field, 0, sizeof(field));
       if (temps) memset(tfield, 0, sizeof(tfield));
       const float lo = y0 - KR - 1.f, hi = y0 + BAND + KR + 2.f;
@@ -111,6 +118,7 @@ public:
         if (y < lo || y > hi) continue;        // does not touch this band
         if (temps) splatT(xs[i], y - y0, temps[i]); else splat(xs[i], y - y0);
       }
+      uint32_t t1 = clock ? clock() : 0;
       uint16_t* out = bands[which];
       which ^= 1;
       if (SCALE == 1) {
@@ -122,6 +130,7 @@ public:
       } else {
         upsample(out, temps != nullptr);
       }
+      if (clock) { uint32_t t2 = clock(); splatUs += t1 - t0; upUs += t2 - t1; }
       sink(y0 * SCALE, OUT_BAND, out, ctx);
     }
   }
@@ -139,10 +148,11 @@ private:
 
   inline uint16_t heatPixel(int d, int tf) const {
     if (d < thrRim_) return bg_;
-    int t = (tf << 8) / d;                   // weighted mean temperature, 0..255
+    int t = (tf * inv_[d]) >> 8;             // weighted mean temperature = tf*256/d, via a reciprocal table
     if (t > 255) t = 255;
     return heatLut_[t];
   }
+  uint32_t inv_[256];                        // 65536 / d
 
   // 2x bilinear upsample of the band's field (and temperature field).
   // Output pixel (ox, oy) samples the field at (ox/2 - 0.25, oy/2 - 0.25), so
