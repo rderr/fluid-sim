@@ -19,6 +19,8 @@ constexpr int SPI_HZ = DISPLAY_SPI_HZ;
 static spi_device_handle_t dev_ = nullptr;
 static spi_transaction_t   tx_;
 static bool inFlight_ = false;
+static uint32_t waitUs_ = 0;      // time spent waiting for DMA (diagnostic)
+inline uint32_t takeWaitUs() { uint32_t v = waitUs_; waitUs_ = 0; return v; }
 
 // DC is driven from the transaction's user field just before each transfer.
 static void IRAM_ATTR preTransfer(spi_transaction_t* t) {
@@ -120,8 +122,10 @@ inline void setBacklight(bool on) { digitalWrite(PIN_TFT_BL, on ? HIGH : LOW); }
 // Block until the previously queued band has been sent.
 inline void waitBand() {
   if (!inFlight_) return;
+  uint32_t t0 = micros();
   spi_transaction_t* r;
   spi_device_get_trans_result(dev_, &r, portMAX_DELAY);
+  waitUs_ += micros() - t0;
   inFlight_ = false;
 }
 

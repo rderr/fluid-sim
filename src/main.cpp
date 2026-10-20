@@ -313,8 +313,9 @@ void loop() {
   bool canPrint = Serial.availableForWrite() > 400;   // never block on a full UART buffer
 #endif
   if (now - statT >= 2000 && canPrint) {
-    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)  spin %+.2f rad/s\n",
-                  frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames, sim.pairCount(),
+    Serial.printf("%.1f fps  sim %.1f ms  draw %.1f ms (dma wait %.1f)  pairs %d  worst: frame %.1f imu %.1f sim %.1f submit %.1f ms  orient %d  g=(%+.2f,%+.2f)  raw=(%+.2f,%+.2f,%+.2f)  spin %+.2f rad/s\n",
+                  frames * 1000.f / (now - statT), simUs / 1000.f / frames, drawUsAcc / 1000.f / frames,
+                  display::takeWaitUs() / 1000.f / frames, sim.pairCount(),
                   maxFrameUs / 1000.f, maxImuUs / 1000.f, maxSimUs / 1000.f, maxSubmitUs / 1000.f,
                   orientation, gx, gy, fAx, fAy, imuOk ? az : 0.f, fW);
     maxFrameUs = maxImuUs = maxSimUs = maxSubmitUs = 0;

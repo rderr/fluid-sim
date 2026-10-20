@@ -20,6 +20,7 @@ constexpr int OUT_W = W * SCALE;            // display size
 constexpr int OUT_H = H * SCALE;
 constexpr int BAND = RENDER_BAND;           // field rows per band
 static_assert(H % BAND == 0, "RENDER_BAND must divide FLUID_H");
+static_assert(SCALE == 1 || SCALE == 2, "DISPLAY_SCALE must be 1 or 2");
 constexpr int OUT_BAND = BAND * SCALE;      // display rows per band
 constexpr int KR = 3;                       // splat kernel radius (px)
 constexpr int KS = 2 * KR + 1;
@@ -143,31 +144,56 @@ private:
     return heatLut_[t];
   }
 
-  // Bilinear upsample of the band's field (and temperature field) by SCALE.
-  // Output row oy samples field row (oy + 0.5) / SCALE - 0.5; the band's extra
-  // field row makes the last output rows interpolate correctly.
+  // 2x bilinear upsample of the band's field (and temperature field).
+  // Output pixel (ox, oy) samples the field at (ox/2 - 0.25, oy/2 - 0.25), so
+  // the weights are always 3/4 and 1/4: each output value is (3*near + far)/4
+  // of two neighbors, horizontally then vertically, in integer math. One
+  // horizontally-upsampled row is cached per field row.
+  uint8_t hrow_[2][OUT_W], throw_[2][OUT_W];
+  int hrowIdx_[2] = {-1, -1};
+
+  inline void hUpsample(const uint8_t* src, uint8_t* dst) {
+    // dst[2k]   = (src[k-1] + 3*src[k]) / 4,   dst[2k+1] = (3*src[k] + src[k+1]) / 4
+    int prev = src[0];
+    for (int k = 0; k < W; ++k) {
+      int cur = src[k], next = (k + 1 < W) ? src[k + 1] : cur;
+      dst[2 * k]     = (uint8_t)((prev + 3 * cur + 2) >> 2);
+      dst[2 * k + 1] = (uint8_t)((3 * cur + next + 2) >> 2);
+      prev = cur;
+    }
+  }
+  inline const uint8_t* hrow(int fy, bool heat, const uint8_t** trow) {
+    int slot = fy & 1;
+    if (hrowIdx_[slot] != fy) {
+      hrowIdx_[slot] = fy;
+      hUpsample(field + fy * W, hrow_[slot]);
+      if (heat) hUpsample(tfield + fy * W, throw_[slot]);
+    }
+    if (trow) *trow = throw_[slot];
+    return hrow_[slot];
+  }
+
   void upsample(uint16_t* out, bool heat) {
+    // Only reached when SCALE == 2 (the 1x path copies through the LUT).
+    hrowIdx_[0] = hrowIdx_[1] = -1;
     for (int oy = 0; oy < OUT_BAND; ++oy) {
-      float sy = (oy + 0.5f) / SCALE - 0.5f;
-      int y0 = (int)sy; if (sy < 0) { y0 = 0; sy = 0; }
-      int y1 = y0 + 1; if (y1 > BAND) y1 = BAND;
-      int fy = (int)((sy - y0) * 256.f);
-      const uint8_t* r0 = field + y0 * W; const uint8_t* r1 = field + y1 * W;
-      const uint8_t* t0 = tfield + y0 * W; const uint8_t* t1 = tfield + y1 * W;
+      // near field row k = oy/2; far row is k-1 for even oy, k+1 for odd oy
+      int k = oy >> 1;
+      int far = (oy & 1) ? k + 1 : k - 1;
+      if (far < 0) far = 0;
+      if (far > BAND) far = BAND;              // the band carries one extra row
+      const uint8_t *tn = nullptr, *tf = nullptr;
+      const uint8_t* n = hrow(k, heat, heat ? &tn : nullptr);
+      const uint8_t* f = hrow(far, heat, heat ? &tf : nullptr);
       uint16_t* o = out + oy * OUT_W;
-      for (int ox = 0; ox < OUT_W; ++ox) {
-        float sx = (ox + 0.5f) / SCALE - 0.5f;
-        int x0 = (int)sx; if (sx < 0) { x0 = 0; sx = 0; }
-        int x1 = x0 + 1; if (x1 >= W) x1 = W - 1;
-        int fx = (int)((sx - x0) * 256.f);
-        int top = r0[x0] * (256 - fx) + r0[x1] * fx;
-        int bot = r1[x0] * (256 - fx) + r1[x1] * fx;
-        int d = (top * (256 - fy) + bot * fy) >> 16;
-        if (!heat) { o[ox] = lut_[d]; continue; }
-        int ttop = t0[x0] * (256 - fx) + t0[x1] * fx;
-        int tbot = t1[x0] * (256 - fx) + t1[x1] * fx;
-        int tf = (ttop * (256 - fy) + tbot * fy) >> 16;
-        o[ox] = heatPixel(d, tf);
+      if (!heat) {
+        for (int ox = 0; ox < OUT_W; ++ox) o[ox] = lut_[(3 * n[ox] + f[ox] + 2) >> 2];
+      } else {
+        for (int ox = 0; ox < OUT_W; ++ox) {
+          int d = (3 * n[ox] + f[ox] + 2) >> 2;
+          if (d < thrRim_) { o[ox] = bg_; continue; }
+          o[ox] = heatPixel(d, (3 * tn[ox] + tf[ox] + 2) >> 2);
+        }
       }
     }
   }
